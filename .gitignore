@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project runtime data (uploads, converted markdown, vector store, outputs)
+data/uploaded/
+data/converted_markdown/
+data/vector_store/
+data/outputs/
