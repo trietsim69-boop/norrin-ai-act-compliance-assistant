@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23 (Presenter Agent added)
+**Last updated:** 2026-05-23 (Streamlit dashboard + follow-up loop added)
 
 ---
 
@@ -12,7 +12,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 
 | # | Step | Status |
 |---|---|---|
-| 1 | Streamlit app shell | not done |
+| 1 | Streamlit app shell | done (upload, disclaimer, analyze button — built into `app.py`) |
 | 2 | MarkItDown file conversion (`preprocessing.py`) | done + tested |
 | 3 | Chunking function (`chunking.py`) | done + tested |
 | 4 | Chroma vector store + config (`vector_store.py`, `config.py`) | done + tested |
@@ -22,13 +22,19 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | 8 | Critic Agent with pass/fail loop | done + tested (mock mode) |
 | 8b | **Pipeline orchestrator** (extension of plan) | done + tested |
 | 9 | Presenter Agent | done + tested |
-| 10 | Dashboard display | not done |
-| 11 | Follow-up input + re-run | not done |
+| 10 | Dashboard display (`app.py`) | done + launch-tested |
+| 11 | Follow-up input + re-run | done (built into `app.py` "Missing info & follow-up" tab) |
 | 12 | Demo cases + trigger tests | not done |
 
 ---
 
 ## 2. Files in the repository
+
+### Entry point (repo root)
+
+| File | Responsibility |
+|---|---|
+| `app.py` | Streamlit dashboard. Upload UI, optional metadata form, runs the full pipeline, renders 6 sections in tabs, shows agent history, supports follow-up answers that trigger a pipeline re-run. |
 
 ### Source code (`src/`)
 
@@ -125,9 +131,9 @@ run_assessment_pipeline(session_id)
 
 ## 5. What's next
 
-1. **Step 10 — Streamlit dashboard** (`app.py`). Upload UI, disclaimer, analyze button. Reads `result["presented"]` from `run_assessment_pipeline` and renders the 6 sections plus warnings.
-2. **Step 11 — Follow-up input**. User answers a missing-information question → appended to session context → pipeline re-runs.
-3. **Step 12 — Demo cases + trigger tests** (`demo_cases/`, `tests/expected_triggers.json`).
+1. **Step 12 — Demo cases + trigger tests** (`demo_cases/`, `tests/expected_triggers.json`). Author sample documents for each of the 5 demo paths (HR screening, customer chatbot, workplace emotion detection, spam filter, GPAI report generator) and a trigger-based evaluation harness.
+2. **Optional: real-LLM run.** Flip `MOCK_LLM=false` in `.env` and verify the agents produce sensible output against the actual DeepSeek API on each demo case.
+3. **Optional: polish pass.** Improve UI styling, add export-to-report, add a portfolio comparison view, or add Finnish implementation context (bonus capabilities from the challenge brief).
 
 ---
 
