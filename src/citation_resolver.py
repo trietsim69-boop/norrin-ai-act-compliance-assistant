@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 from src.vector_store import get_uploaded_collection, get_corpus_collection
+from src.corpus_metadata import law_layer_display, topic_display
 
 _SECTION_RE = re.compile(
     r"(Article\s+\d+(?:\(\d+\))?|Annex\s+[IVXLC]+(?:\(\d+\))?|Chapter\s+[IVXLC]+|Recital\s+\d+)",
@@ -91,17 +92,24 @@ def resolve_citation(
 
 
 def format_source_label(resolved: dict) -> str:
-    """Build a single human-readable source string, e.g. 'EU AI Act, Annex III'."""
+    """Build a human-readable source string; prefer stored citation_label."""
+    citation_label = (resolved.get("citation_label") or "").strip()
+    if citation_label:
+        page = resolved.get("page")
+        return f"{citation_label}, p. {page}" if page else citation_label
+
     label = (resolved.get("source_label") or "").strip()
     section = (resolved.get("section") or "").strip()
+    article = (resolved.get("article") or "").strip()
     page = resolved.get("page")
 
     if not label:
         label = resolved.get("chunk_id", "Unknown source")
 
+    ref = article or section
     parts = [label]
-    if section and section.lower() not in label.lower():
-        parts.append(section)
+    if ref and ref.lower() not in label.lower():
+        parts.append(ref)
     if page:
         parts.append(f"p. {page}")
     return ", ".join(parts)
@@ -109,6 +117,30 @@ def format_source_label(resolved: dict) -> str:
 
 def evidence_type_label(source_type: str) -> str:
     return _EVIDENCE_TYPE_LABELS.get(source_type or "unknown", "Unknown")
+
+
+def format_full_chunk_text(text: str) -> str:
+    """Readable full chunk for expander UI — keeps paragraphs, strips HTML/table noise."""
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    paragraphs = re.split(r"\n{2,}", text)
+    cleaned: list[str] = []
+    for para in paragraphs:
+        p = para.strip()
+        if not p:
+            continue
+        p = re.sub(r"^\s*\|[-:\s|]+\|\s*$", "", p, flags=re.MULTILINE)
+        p = re.sub(r"\|[-:\s|]+\|", " ", p)
+        p = re.sub(r"\|+", " ", p)
+        p = re.sub(r"\s*\|\s*", " ", p)
+        p = re.sub(r"\(\d+\)\s*\|", "", p)
+        p = " ".join(p.split())
+        if p:
+            cleaned.append(p)
+    return "\n\n".join(cleaned)
 
 
 # ---------------------------------------------------------------------------
@@ -153,12 +185,16 @@ def _resolve_from_chroma(chunk_ids: list[str], session_id: str = "") -> dict[str
 def _entry_from_store(chunk_id: str, text: str, meta: dict, fallback_type: str) -> dict:
     source_type = meta.get("source_type") or fallback_type
     filename = meta.get("filename", "")
+    citation_label = (meta.get("citation_label") or "").strip()
     title = meta.get("title", "")
     section = (meta.get("section") or "").strip()
+    article = (meta.get("article") or "").strip()
     if not section:
         section = _infer_section_from_text(text)
 
-    if source_type in ("regulation", "official_guidance"):
+    if citation_label:
+        source_label = citation_label.split(" — ")[0]
+    elif source_type in ("regulation", "official_guidance"):
         source_label = title or _title_from_corpus_stem(_parse_corpus_stem(chunk_id)) or "EU AI Act"
     elif source_type == "user_input":
         source_label = "Manual use-case description"
@@ -172,9 +208,16 @@ def _entry_from_store(chunk_id: str, text: str, meta: dict, fallback_type: str) 
         "found": True,
         "source_type": source_type,
         "source_label": source_label,
+        "citation_label": citation_label,
         "section": section,
+        "article": article,
+        "law_source": meta.get("law_source", ""),
+        "law_layer": meta.get("law_layer", ""),
+        "topic": meta.get("topic", ""),
+        "jurisdiction": meta.get("jurisdiction", ""),
         "page": page,
-        "excerpt": _make_excerpt(text, section=section),
+        "excerpt": _make_excerpt(text, section=section or article),
+        "full_text": format_full_chunk_text(text),
         "filename": filename,
         "text": text,
     }
@@ -195,18 +238,29 @@ def _index_evidence_cache(chunks: list[dict]) -> dict[str, dict]:
             "found": True,
             "source_type": chunk.get("source_type") or _guess_source_type_from_id(cid),
             "source_label": (
-                chunk.get("title")
-                or _prettify_doc_name(chunk.get("filename", ""))
-                or _title_from_uploaded_id(cid)
-                or _title_from_corpus_stem(_parse_corpus_stem(cid))
-                or cid
+                chunk.get("citation_label", "").split(" — ")[0]
+                if chunk.get("citation_label")
+                else (
+                    chunk.get("title")
+                    or _prettify_doc_name(chunk.get("filename", ""))
+                    or _title_from_uploaded_id(cid)
+                    or _title_from_corpus_stem(_parse_corpus_stem(cid))
+                    or cid
+                )
             ),
+            "citation_label": chunk.get("citation_label", ""),
             "section": (chunk.get("section") or _infer_section_from_text(chunk.get("text", ""))).strip(),
+            "article": chunk.get("article", ""),
+            "law_source": chunk.get("law_source", ""),
+            "law_layer": chunk.get("law_layer", ""),
+            "topic": chunk.get("topic", ""),
+            "jurisdiction": chunk.get("jurisdiction", ""),
             "page": chunk.get("page") or None,
             "excerpt": _make_excerpt(
                 chunk.get("text", ""),
-                section=(chunk.get("section") or _infer_section_from_text(chunk.get("text", ""))).strip(),
+                section=(chunk.get("section") or chunk.get("article") or "").strip(),
             ),
+            "full_text": format_full_chunk_text(chunk.get("text", "")),
             "filename": chunk.get("filename", ""),
             "text": chunk.get("text", ""),
         }
@@ -315,14 +369,25 @@ def _guess_source_type_from_id(chunk_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _normalize_entry(raw: dict, resolver: str) -> dict:
+    section = (raw.get("section") or "").strip()
+    article = (raw.get("article") or "").strip()
     entry = {
         "chunk_id": raw.get("chunk_id", ""),
         "found": bool(raw.get("found", False)),
         "source_type": raw.get("source_type") or "unknown",
         "source_label": (raw.get("source_label") or raw.get("chunk_id") or "").strip(),
-        "section": (raw.get("section") or "").strip(),
+        "citation_label": (raw.get("citation_label") or "").strip(),
+        "section": section,
+        "article": article,
+        "law_source": raw.get("law_source", ""),
+        "law_layer": raw.get("law_layer", ""),
+        "law_layer_label": law_layer_display(raw.get("law_layer", "")),
+        "topic": raw.get("topic", ""),
+        "topic_label": topic_display(raw.get("topic", "")),
+        "jurisdiction": raw.get("jurisdiction", ""),
         "page": raw.get("page"),
-        "excerpt": (raw.get("excerpt") or _make_excerpt(raw.get("text", ""), section=(raw.get("section") or "").strip())).strip(),
+        "excerpt": (raw.get("excerpt") or _make_excerpt(raw.get("text", ""), section=section or article)).strip(),
+        "full_text": (raw.get("full_text") or format_full_chunk_text(raw.get("text", ""))).strip(),
         "filename": raw.get("filename", ""),
         "source": "",
         "evidence_type": evidence_type_label(raw.get("source_type") or "unknown"),

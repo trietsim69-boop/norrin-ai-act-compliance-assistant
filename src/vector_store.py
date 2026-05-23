@@ -19,6 +19,13 @@ from src.config import (
 )
 from src.chunking import chunk_text
 from src.preprocessing import convert_file_to_markdown, SUPPORTED_EXTENSIONS
+from src.corpus_metadata import (
+    infer_file_profile,
+    enrich_corpus_chunk,
+    chroma_metadata_from_corpus_chunk,
+    enrich_uploaded_chunk,
+    chroma_metadata_from_uploaded_chunk,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -85,20 +92,12 @@ def get_corpus_collection():
 def add_chunks_to_uploaded(chunks: list[dict]) -> None:
     if not chunks:
         return
+    enriched = [enrich_uploaded_chunk(c) for c in chunks]
     collection = get_uploaded_collection()
     collection.upsert(
-        ids=[c["chunk_id"] for c in chunks],
-        documents=[c["text"] for c in chunks],
-        metadatas=[
-            {
-                "session_id": c.get("session_id", ""),
-                "filename": c.get("filename", ""),
-                "source_type": c.get("source_type", "uploaded_document"),
-                "document_type": c.get("document_type", "general_document"),
-                "chunk_index": c.get("chunk_index", 0),
-            }
-            for c in chunks
-        ],
+        ids=[c["chunk_id"] for c in enriched],
+        documents=[c["text"] for c in enriched],
+        metadatas=[chroma_metadata_from_uploaded_chunk(c) for c in enriched],
     )
 
 
@@ -154,8 +153,7 @@ def load_corpus_to_chroma(force_reload: bool = False, verbose: bool = False) -> 
                 print(f"[corpus]   - empty after conversion, skipped")
             continue
 
-        source_type = _infer_corpus_source_type(src_file.stem)
-        title = _infer_corpus_title(src_file.stem)
+        file_profile = infer_file_profile(src_file.stem)
 
         raw_chunks = chunk_text(
             text=text,
@@ -163,18 +161,18 @@ def load_corpus_to_chroma(force_reload: bool = False, verbose: bool = False) -> 
             overlap=CHUNK_OVERLAP,
             session_id="",
             filename=src_file.name,
-            source_type=source_type,
+            source_type=file_profile["source_type"],
             document_type="eu_ai_act_corpus",
         )
 
+        enriched_file_chunks: list[dict] = []
         for c in raw_chunks:
             c["chunk_id"] = f"corpus_{src_file.stem}_chunk{c['chunk_index']}"
-            c["title"] = title
-            c["section"] = _infer_corpus_section(c["text"])
+            enriched_file_chunks.append(enrich_corpus_chunk(c, file_profile))
 
         if verbose:
-            print(f"[corpus]   - {len(raw_chunks)} chunks")
-        all_chunks.extend(raw_chunks)
+            print(f"[corpus]   - {len(enriched_file_chunks)} chunks")
+        all_chunks.extend(enriched_file_chunks)
 
     if not all_chunks:
         return 0
@@ -189,17 +187,7 @@ def load_corpus_to_chroma(force_reload: bool = False, verbose: bool = False) -> 
         collection.upsert(
             ids=[c["chunk_id"] for c in batch],
             documents=[c["text"] for c in batch],
-            metadatas=[
-                {
-                    "source_type": c.get("source_type", "regulation"),
-                    "document_type": c.get("document_type", "eu_ai_act_corpus"),
-                    "filename": c.get("filename", ""),
-                    "title": c.get("title", "EU AI Act"),
-                    "section": c.get("section", ""),
-                    "chunk_index": c.get("chunk_index", 0),
-                }
-                for c in batch
-            ],
+            metadatas=[chroma_metadata_from_corpus_chunk(c) for c in batch],
         )
         if verbose:
             print(f"[corpus]   indexed {min(i + BATCH, len(all_chunks))}/{len(all_chunks)}")
@@ -208,27 +196,7 @@ def load_corpus_to_chroma(force_reload: bool = False, verbose: bool = False) -> 
 
 
 def _infer_corpus_source_type(stem: str) -> str:
-    stem_lower = stem.lower()
-    if "guideline" in stem_lower or "guidance" in stem_lower:
-        return "official_guidance"
-    return "regulation"
-
-
-def _infer_corpus_title(stem: str) -> str:
-    stem_lower = stem.lower()
-    if "prohibited" in stem_lower:
-        return "Commission Guidelines on Prohibited AI Practices"
-    if "definition" in stem_lower and "system" in stem_lower:
-        return "Commission Guidelines on the Definition of an AI System"
-    if "ai_act" in stem_lower or "1689" in stem_lower:
-        return "EU AI Act (Regulation 2024/1689)"
-    return stem.replace("_", " ")
-
-
-def _infer_corpus_section(text: str) -> str:
-    import re
-    match = re.search(r"(Article\s+\d+|Annex\s+[IVX]+|Chapter\s+[IVX]+|Recital\s+\d+)", text, re.IGNORECASE)
-    return match.group(0) if match else ""
+    return infer_file_profile(stem)["source_type"]
 
 
 # ---------------------------------------------------------------------------

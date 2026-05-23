@@ -61,11 +61,20 @@ def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
             st.markdown(f"**Claim:** {card['claim']}")
         st.markdown(f"**Source:** {card.get('source') or card.get('source_label') or '—'}")
         st.markdown(f"**Type:** {card.get('evidence_type') or 'Unknown'}")
+        if card.get("law_layer_label"):
+            st.markdown(f"**Layer:** {card['law_layer_label']}")
+        if card.get("topic_label"):
+            st.markdown(f"**Topic:** {card['topic_label']}")
         excerpt = (card.get("excerpt") or "").strip()
         if excerpt:
             st.markdown(f'**Evidence excerpt:** “{excerpt}”')
         else:
             st.caption("Evidence excerpt: not available for this chunk.")
+
+        full = (card.get("full_text") or (card.get("_resolved") or {}).get("full_text") or "").strip()
+        if full:
+            with st.expander(f"View full source text ({len(full.split())} words)", expanded=False):
+                st.text(full)
 
         explanation = (card.get("relevance_explanation") or "").strip()
         if explanation:

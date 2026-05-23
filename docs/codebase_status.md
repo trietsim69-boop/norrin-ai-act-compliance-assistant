@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23 (human-readable citation resolver + citation cards UI)
+**Last updated:** 2026-05-23 (demo cases + trigger-based evaluation harness)
 
 ---
 
@@ -24,7 +24,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | 9 | Presenter Agent | done + tested |
 | 10 | Dashboard display (`app.py`) | done + launch-tested |
 | 11 | Follow-up input + re-run | done (built into `app.py` "Missing info & follow-up" tab) |
-| 12 | Demo cases + trigger tests | not done |
+| 12 | Demo cases + trigger tests | done (`demo_cases/`, `tests/expected_triggers.json`, `src/evaluation.py`, `scripts/run_trigger_tests.py`) |
 
 ---
 
@@ -49,6 +49,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | `citation_relevance.py` | Score claim↔excerpt alignment, precise claim labels, relevance explanations, primary vs additional filter | `enrich_citation_row`, `build_system_inference` |
 | `llm.py` | LLM provider abstraction (DeepSeek / OpenAI / Anthropic) + mock-mode switch | `call_llm`, `is_mock_mode` |
 | `pipeline.py` | Multi-agent orchestrator: Assessment → Critic → (revise once if fail) | `run_assessment_pipeline` |
+| `evaluation.py` | Trigger-based demo evaluation: ingest demo_cases, run pipeline, score against `tests/expected_triggers.json` | `run_all_trigger_tests`, `run_trigger_test`, `evaluate_pipeline_result` |
 
 ### Agents (`src/agents/`)
 
@@ -69,11 +70,22 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 
 Cached Markdown conversions live in `data/converted_markdown/_corpus/` and are re-used on subsequent runs.
 
+### Demo cases (`demo_cases/`)
+
+Five folders with sample Markdown documents (2–3 files each) covering the MVP evaluation paths: HR screening, customer chatbot, workplace emotion detection, spam filter, LLM report generator. See [`demo_cases/README.md`](../demo_cases/README.md).
+
+### Tests
+
+| File | Purpose |
+|---|---|
+| `tests/expected_triggers.json` | Expected risk direction, domain trigger, and follow-up questions per demo case |
+
 ### Scripts
 
 | File | Purpose |
 |---|---|
 | `scripts/load_corpus.py` | One-shot loader. Run once with `python -m scripts.load_corpus`. Use `--force` to wipe and reload. |
+| `scripts/run_trigger_tests.py` | Run trigger-based evaluation on all demo cases (`python -m scripts.run_trigger_tests`). Defaults to `MOCK_LLM=true`; pass `--real-llm` for live API runs. |
 
 ### Config / infra
 
@@ -134,9 +146,8 @@ run_assessment_pipeline(session_id)
 
 ## 5. What's next
 
-1. **Step 12 — Demo cases + trigger tests** (`demo_cases/`, `tests/expected_triggers.json`). Author sample documents for each of the 5 demo paths (HR screening, customer chatbot, workplace emotion detection, spam filter, GPAI report generator) and a trigger-based evaluation harness.
-2. **Optional: real-LLM run.** Flip `MOCK_LLM=false` in `.env` and verify the agents produce sensible output against the actual DeepSeek API on each demo case.
-3. **Optional: polish pass.** Improve UI styling, add export-to-report, add a portfolio comparison view, or add Finnish implementation context (bonus capabilities from the challenge brief).
+1. **Optional: real-LLM run.** Flip `MOCK_LLM=false` in `.env` (or use `python -m scripts.run_trigger_tests --real-llm`) and verify agents against the live API on each demo case.
+2. **Optional: polish pass.** Improve UI styling, add export-to-report, add a portfolio comparison view, or add Finnish implementation context (bonus capabilities from the challenge brief).
 
 ---
 

@@ -1,5 +1,6 @@
 from src.config import TOP_K
 from src.vector_store import get_uploaded_collection, get_corpus_collection
+from src.corpus_metadata import infer_retrieval_targets
 
 # ---------------------------------------------------------------------------
 # Standard retrieval queries used for every assessment
@@ -42,15 +43,20 @@ def retrieve_uploaded_context(
 def retrieve_ai_act_context(
     query: str,
     top_k: int = TOP_K,
+    where: dict | None = None,
 ) -> list[dict]:
     collection = get_corpus_collection()
     if collection.count() == 0:
         return []
 
-    results = collection.query(
-        query_texts=[query],
-        n_results=min(top_k, collection.count()),
-    )
+    kwargs: dict = {
+        "query_texts": [query],
+        "n_results": min(top_k, collection.count()),
+    }
+    if where:
+        kwargs["where"] = where
+
+    results = collection.query(**kwargs)
 
     return _format_results(results)
 
@@ -80,6 +86,18 @@ def retrieve_combined_context(
                 uploaded_chunks.append(chunk)
 
         for chunk in retrieve_ai_act_context(q, top_k=top_k):
+            cid = chunk["chunk_id"]
+            if cid not in seen_corpus:
+                seen_corpus.add(cid)
+                corpus_chunks.append(chunk)
+
+    # Metadata-targeted corpus retrieval from uploaded-document signals
+    for target in infer_retrieval_targets(uploaded_chunks):
+        for chunk in retrieve_ai_act_context(
+            target["query"],
+            top_k=top_k,
+            where=target.get("where"),
+        ):
             cid = chunk["chunk_id"]
             if cid not in seen_corpus:
                 seen_corpus.add(cid)

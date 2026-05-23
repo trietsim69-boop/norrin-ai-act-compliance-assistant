@@ -233,10 +233,16 @@ def _format_chunks(chunks: list[dict], max_text_chars: int = 800) -> str:
         if len(text) > max_text_chars:
             text = text[:max_text_chars].rstrip() + " […]"
         header_bits = [c.get("chunk_id", "?")]
+        if c.get("citation_label"):
+            header_bits.append(f"cite={c['citation_label']}")
         if c.get("filename"):
             header_bits.append(f"file={c['filename']}")
         if c.get("section"):
             header_bits.append(f"section={c['section']}")
+        if c.get("law_layer"):
+            header_bits.append(f"layer={c['law_layer']}")
+        if c.get("topic"):
+            header_bits.append(f"topic={c['topic']}")
         if c.get("source_type"):
             header_bits.append(f"type={c['source_type']}")
         lines.append(f"[{' | '.join(header_bits)}]\n{text}")
@@ -289,10 +295,12 @@ def _pick_mock_fixture(
 
     if has("emotion", "mood", "affect") and has("workplace", "employee", "worker"):
         base = _MOCK_EMOTION
-    elif has("recruit", "candidate", "hiring", "applicant", "screening", "talentrank"):
-        base = _MOCK_HR
-    elif has("spam", "filter") and not has("recruit"):
+    elif has("spam") and has("filter"):
         base = _MOCK_SPAM
+    elif has("recruit", "candidate", "hiring", "screening", "talentrank") or (
+        has("applicant") and has("recruit", "hiring", "shortlist", "cv", "talentrank")
+    ):
+        base = _MOCK_HR
     elif has("chatbot", "conversational", "virtual assistant", "customer support"):
         base = _MOCK_CHATBOT
     elif has("gpt", "llm", "large language model", "claude", "report generator"):
@@ -341,6 +349,7 @@ _MOCK_HR = _fixture({
         {"area": "risk_management",   "observation": "Implement a risk management system for the ML and LLM components.",               "citations": ["corpus:article_9"]}
     ],
     "missing_information": [
+        {"topic": "Human oversight", "why_it_matters": "Required for high-risk employment AI.", "suggested_question": "Can a recruiter override or reject every AI ranking before it affects a candidate?"},
         {"topic": "Final decision impact", "why_it_matters": "Affects whether the Annex III(2) exclusion applies.", "suggested_question": "Can a candidate be rejected without a recruiter review?"},
         {"topic": "Provider vs deployer role", "why_it_matters": "Different obligations apply.",                    "suggested_question": "Does your organisation develop the model or only deploy it?"}
     ],
@@ -400,6 +409,7 @@ _MOCK_EMOTION = _fixture({
     ],
     "missing_information": [
         {"topic": "What is inferred",         "why_it_matters": "Determines if Article 5(1)(f) applies.",          "suggested_question": "Does the system infer emotions, or only physical states like attentiveness?"},
+        {"topic": "Deployment context",       "why_it_matters": "Workplace scope drives Article 5(1)(f).",         "suggested_question": "Is the system deployed in workplaces, schools, or other covered settings?"},
         {"topic": "Medical or safety exception", "why_it_matters": "Only exception to Article 5(1)(f).",            "suggested_question": "Is the use specifically for a medical or safety purpose?"}
     ],
     "needs_more_evidence": []
@@ -455,7 +465,7 @@ _MOCK_GPAI = _fixture({
         {"area": "transparency",      "observation": "Mark or label AI-generated content where required (Article 50(2)–(3)).",           "citations": ["corpus:article_50"]}
     ],
     "missing_information": [
-        {"topic": "Provider documentation", "why_it_matters": "Required for compliant deployment.",          "suggested_question": "Has the GPAI provider supplied Article 53 documentation?"},
+        {"topic": "Provider compliance documentation", "why_it_matters": "Required for compliant deployment.",          "suggested_question": "Has the GPAI provider supplied Article 53 compliance documentation?"},
         {"topic": "Downstream use of reports", "why_it_matters": "May trigger high-risk obligations.",       "suggested_question": "Are the reports used to inform HR, credit, or other high-risk decisions?"}
     ],
     "needs_more_evidence": []

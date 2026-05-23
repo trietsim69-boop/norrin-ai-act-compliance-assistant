@@ -41,6 +41,7 @@ OUTPUTS_DIR: Path = DATA_DIR / "outputs"
 
 # --- Corpus ---
 CORPUS_DIR: Path = ROOT_DIR / "corpus"
+DEMO_CASES_DIR: Path = ROOT_DIR / "demo_cases"
 
 # --- Chroma collection names ---
 UPLOADED_DOCS_COLLECTION: str = "uploaded_docs_collection"

@@ -1,0 +1,47 @@
+[
+  {
+    "case_slug": "hr_screening",
+    "case_name": "HR candidate screening",
+    "expected_trigger": "employment",
+    "expected_risk_direction": "high_risk",
+    "must_ask_about": ["human oversight", "decision impact", "provider/deployer role"],
+    "min_legal_citations": 1,
+    "expect_critic_stage": true
+  },
+  {
+    "case_slug": "customer_chatbot",
+    "case_name": "Customer support chatbot",
+    "expected_trigger": "chatbot",
+    "expected_risk_direction": "limited_risk",
+    "must_ask_about": ["transparency", "GPAI use"],
+    "min_legal_citations": 1,
+    "expect_critic_stage": true
+  },
+  {
+    "case_slug": "workplace_emotion_detection",
+    "case_name": "Workplace emotion detection",
+    "expected_trigger": "emotion recognition workplace",
+    "expected_risk_direction": "prohibited_or_unacceptable",
+    "must_ask_about": ["deployment context", "what is inferred"],
+    "min_legal_citations": 1,
+    "expect_critic_stage": true
+  },
+  {
+    "case_slug": "spam_filter",
+    "case_name": "Email spam filter",
+    "expected_trigger": "narrow filtering",
+    "expected_risk_direction": "minimal_risk",
+    "must_ask_about": [],
+    "min_legal_citations": 1,
+    "expect_critic_stage": true
+  },
+  {
+    "case_slug": "llm_report_generator",
+    "case_name": "LLM report generator",
+    "expected_trigger": "GPAI third-party",
+    "expected_risk_direction": "gpai_obligations",
+    "must_ask_about": ["provider compliance", "human review"],
+    "min_legal_citations": 1,
+    "expect_critic_stage": true
+  }
+]

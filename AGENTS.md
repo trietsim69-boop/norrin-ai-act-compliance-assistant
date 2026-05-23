@@ -114,6 +114,7 @@ norrin-ai-act-compliance-assistant/
 | Install dependencies | `pip install -r requirements.txt` |
 | Load EU AI Act corpus into Chroma (one-shot) | `python -m scripts.load_corpus` |
 | Force-reload corpus after editing the loader | `python -m scripts.load_corpus --force` |
+| Run trigger tests on demo cases (mock mode) | `python -m scripts.run_trigger_tests` |
 | Run Streamlit UI (when built) | `streamlit run app.py` |
 | Quick mock-mode pipeline check (when needed) | write a temp script under `scripts/`, run `python -m scripts.<name>`, then delete it |
 

@@ -291,6 +291,10 @@ def _claim_row(*, claim: str, resolved: dict, claim_type: str) -> dict:
         "source": resolved.get("source", resolved.get("source_label", "")),
         "evidence_type": resolved.get("evidence_type", "Unknown"),
         "excerpt": resolved.get("excerpt", ""),
+        "full_text": resolved.get("full_text", ""),
+        "law_layer_label": resolved.get("law_layer_label", ""),
+        "topic_label": resolved.get("topic_label", ""),
+        "citation_label": resolved.get("citation_label", ""),
         "chunk_id": resolved.get("chunk_id", ""),
         "found": resolved.get("found", False),
         "_resolved": resolved,
@@ -357,5 +361,4 @@ def _build_warnings(a: dict, critic: dict) -> list[dict]:
         })
 
     return warnings
-
 
