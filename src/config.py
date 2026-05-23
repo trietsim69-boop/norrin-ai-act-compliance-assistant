@@ -8,10 +8,22 @@ load_dotenv()
 ROOT_DIR = Path(__file__).parent.parent
 
 # --- LLM ---
-LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai")  # "openai" or "anthropic"
-LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o")
+# Provider used by the agents: "deepseek" | "openai" | "anthropic"
+LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "deepseek")
+LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")
+
+# API keys
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+
+# Optional override for OpenAI-compatible endpoints (e.g. DeepSeek, Together, OpenRouter).
+# When empty, the default provider URL is used.
+LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
+
+# When MOCK_LLM=true, src.llm.call_llm() returns fixture responses instead of
+# calling the real API. Useful for offline development and demo fallback.
+MOCK_LLM: bool = os.getenv("MOCK_LLM", "true").lower() in ("1", "true", "yes", "on")
 
 # --- Embeddings ---
 # "local" uses all-MiniLM-L6-v2 via SentenceTransformers (no API key needed) — default
