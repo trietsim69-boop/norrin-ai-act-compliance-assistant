@@ -18,7 +18,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.citation_relevance import enrich_citation_row, build_system_inference
+from src.citation_relevance import (
+    enrich_citation_row,
+    build_system_inference,
+    validate_risk_classification_evidence,
+    score_citation_for_fact,
+)
 
 DISCLAIMER = (
     "This is a preliminary, AI-generated assessment for structured review. "
@@ -95,6 +100,13 @@ def presenter_agent(pipeline_result: dict, chunk_lookup: dict | None = None) -> 
     }
 
     warnings = _build_warnings(assessment, critic)
+    risk_evidence = validate_risk_classification_evidence(
+        assessment,
+        sections["citations"].get("citation_cards", [])
+        + sections["citations"].get("additional_evidence", []),
+    )
+    for msg in risk_evidence.get("warnings") or []:
+        warnings.append({"severity": "medium", "message": msg})
 
     return {
         "sections": sections,
@@ -127,6 +139,12 @@ def _section_facts(a: dict, lookup: dict) -> dict:
     def _build(key: str, label: str, fact: dict) -> dict:
         confidence = fact.get("confidence", "low")
         evidence_ids = list(fact.get("evidence") or [])
+        claim = f"{label}: {(fact.get('value') or 'Unclear').strip()}"
+        evidence_resolved = []
+        for cid in evidence_ids:
+            card = _card_for(cid, lookup)
+            scored = score_citation_for_fact(claim, card, a)
+            evidence_resolved.append({**card, **scored})
         return {
             "key": key,
             "label": label,
@@ -134,7 +152,7 @@ def _section_facts(a: dict, lookup: dict) -> dict:
             "confidence": confidence,
             "confidence_color": CONFIDENCE_COLORS.get(confidence, "grey"),
             "evidence": evidence_ids,
-            "evidence_resolved": [_card_for(cid, lookup) for cid in evidence_ids],
+            "evidence_resolved": evidence_resolved,
         }
 
     for key, label in FACT_LABELS.items():
@@ -154,6 +172,18 @@ def _section_assessment(a: dict, lookup: dict) -> dict:
     ai_label, ai_color = AI_SYSTEM_LABELS.get(ai_value, (ai_value, "grey"))
     risk_label, risk_color = RISK_TIER_LABELS.get(risk_value, (risk_value, "grey"))
     legal_ids = list(pa.get("legal_citations") or [])
+    legal_resolved = [_card_for(cid, lookup) for cid in legal_ids]
+    legal_enriched = [
+        enrich_citation_row(
+            _claim_row(claim="Regulatory reference", resolved=c, claim_type="legal"),
+            claim_type="legal",
+            assessment=a,
+        )
+        for c in legal_resolved
+    ]
+    legal_primary = [
+        r for r in legal_enriched if r.get("support_label") in ("strong", "moderate")
+    ]
 
     return {
         "title": "Preliminary EU AI Act assessment",
@@ -174,7 +204,8 @@ def _section_assessment(a: dict, lookup: dict) -> dict:
         },
         "reasoning": (pa.get("reasoning") or "").strip(),
         "legal_citations": legal_ids,
-        "legal_citations_resolved": [_card_for(cid, lookup) for cid in legal_ids],
+        "legal_citations_resolved": legal_primary,
+        "legal_citations_all": legal_enriched,
     }
 
 
@@ -261,8 +292,10 @@ def _section_citations(a: dict, lookup: dict) -> dict:
     for r in raw_rows:
         claim_type = r.pop("_claim_type")
         rows.append(enrich_citation_row(r, claim_type=claim_type, assessment=a))
-    primary = [r for r in rows if r.get("display_tier") == "primary"]
-    additional = [r for r in rows if r.get("display_tier") != "primary"]
+
+    primary = [r for r in rows if r.get("support_label") in ("strong", "moderate")]
+    additional = [r for r in rows if r.get("support_label") == "weak"]
+    unsupported = [r for r in rows if r.get("support_label") == "unsupported"]
 
     uploaded_seen: dict[str, dict] = {}
     corpus_seen: dict[str, dict] = {}
@@ -280,6 +313,7 @@ def _section_citations(a: dict, lookup: dict) -> dict:
         "claims_table": primary,
         "citation_cards": primary,
         "additional_evidence": additional,
+        "unsupported_or_debug_evidence": unsupported,
         "uploaded_evidence": list(uploaded_seen.values()),
         "corpus_citations": list(corpus_seen.values()),
     }

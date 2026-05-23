@@ -80,7 +80,7 @@ streamlit run app.py --server.port 8521
 
 **Files:** `product_brief_insightwriter.md`, `internal_policy_gpai.md`
 
-**Note:** There is **no bundled predictive-maintenance demo folder** in this repo. For industrial PM scenarios, paste a manual description or use your own PDF; expect **minimal or unclear** risk when deployment/safety-component context is missing.
+**Note:** A bundled **predictive maintenance** demo folder is available at `demo_cases/predictive_maintenance/`. Use it to show citation validation — wrong-domain law is downgraded, not shown as strong proof.
 
 ### Expected outputs (mock mode)
 
@@ -113,8 +113,12 @@ Say: “Every stage is stored in `history[]` — not a single black-box completi
 
 1. **Citations** tab  
 2. Point to **System inference** block (agent conclusion, not a quote)  
-3. Open a **Regulatory reference** card — readable **Source**, excerpt, “Why this supports the claim”  
-4. Mention chunk IDs are under **Debug** only ([`citation_and_evidence.md`](citation_and_evidence.md))  
+3. Open a primary card — note **Support:** Strong / Moderate and readable **Source** + excerpt  
+4. If weak: open **Additional evidence** expander — amber warning explains limited support  
+5. **Unsupported / debug evidence** expander — citations stripped or rejected by validation/scoring  
+6. Chunk IDs under **Debug** only ([`citation_and_evidence.md`](citation_and_evidence.md))  
+
+**Predictive maintenance demo:** upload [`demo_cases/predictive_maintenance/technical_overview.md`](../demo_cases/predictive_maintenance/technical_overview.md) — expect minimal risk; HR Annex III must not appear as strong primary citation.
 
 ---
 

@@ -13,13 +13,14 @@ For the full pipeline narrative see [`docs/multi_agent_pipeline.md`](docs/multi_
 **Flow:**
 
 ```text
-retrieve_combined_context()
-  → assessment_agent()           # v1
+retrieve_combined_context()          # scoped corpus queries
+  → assessment_agent()               # v1
+  → validate_and_repair_assessment()   # inside assessment_agent, post-LLM
   → critic_agent()
-  → [if fail] assessment_agent() # v2 (revision)
-  → [if fail] critic_agent()     # v2
+  → [if fail] assessment_agent()     # v2 (revision)
+  → [if fail] critic_agent()         # v2
   → resolve_citations()
-  → presenter_agent()
+  → presenter_agent()                  # enrich_citation_row + tier filtering
 ```
 
 **Returns:** `{ assessment, critic, presented, history[], _meta }`
@@ -37,10 +38,22 @@ retrieve_combined_context()
 
 - `session_id` — namespaces uploaded chunks in Chroma  
 - `session_metadata` — case name, sector, org role, deployment context, follow-up answers  
-- Retrieved `uploaded_chunks` + `corpus_chunks` (via `retrieve_combined_context`)  
+- Retrieved `uploaded_chunks` + `corpus_chunks` (via `retrieve_combined_context` — corpus queries scoped to uploaded signals)  
 - **Revision mode:** `previous_assessment` + `revision_instruction` from Critic  
 
 Agents never receive the raw Chroma client or full vector DB.
+
+### Post-LLM validation (`src/citation_validation.py`)
+
+After each LLM response, **`validate_and_repair_assessment()`** runs before the result leaves the agent:
+
+- Strips citations not in the evidence pack  
+- Enforces uploaded vs corpus source-type rules  
+- Rejects legal topic mismatches (e.g. HR Annex III for industrial PM)  
+- In live mode: strips legal citations below moderate support score  
+- Records repairs in `assessment._meta.citation_repairs`  
+
+This is the **first programmatic gate** against fake strong citations.
 
 ### Autonomous decisions
 
@@ -69,11 +82,15 @@ Plus `_meta` (iterations, chunk counts, revision flag).
 
 ### When it asks for more evidence
 
-Hybrid **ReAct** loop (max 2 iterations): if the model returns `needs_more_evidence` queries, the agent runs additional retrieval on uploaded + corpus collections, dedupes, and re-prompts — bounded to avoid runaway loops.
+Hybrid **ReAct** loop (max 2 iterations): if the model returns `needs_more_evidence` queries, the agent runs additional retrieval on uploaded + corpus collections, dedupes, re-prompts, and re-validates — bounded to avoid runaway loops.
+
+### Citation discipline (prompt rules)
+
+Rules 6–10 in `ASSESSMENT_SYSTEM_PROMPT`: cite only chunks that **directly** support each claim; never use corpus for uploaded facts or uploads for legal rules; leave evidence empty and lower confidence when support is missing.
 
 ### Mock mode
 
-`MOCK_LLM=true` → keyword-matched fixtures for five demo paths (offline demos).
+`MOCK_LLM=true` → keyword-matched fixtures for six demo paths (offline demos). Mock chunk IDs (`uploaded:chunk0`, `corpus:article_6`) are remapped to real pack chunks during validation.
 
 ---
 
@@ -85,6 +102,7 @@ Hybrid **ReAct** loop (max 2 iterations): if the model returns `needs_more_evide
 
 - Assessment JSON from Assessment Agent  
 - Same `uploaded_chunks` + `corpus_chunks` the assessor saw  
+- **Full text** of every cited chunk (up to 600 chars each) for relevance review  
 
 ### Checklist
 
@@ -96,6 +114,9 @@ Hybrid **ReAct** loop (max 2 iterations): if the model returns `needs_more_evide
 6. Legal safety — qualified language, not final legal advice  
 7. Source relevance — corpus cites match claimed risk category  
 8. Internal contradictions  
+9. **Citation relevance** — does each cited chunk **directly** support the specific claim?  
+10. **Source type separation** — no corpus IDs in fact evidence; no upload-only legal cites  
+11. **Over-citation** — flag chunk_ids cited only because they appeared in retrieval  
 
 ### Pass/fail logic
 
@@ -127,8 +148,10 @@ The MVP plan forbids new legal reasoning at presentation time. A programmatic fo
 
 - Risk tier labels and warning severity  
 - Grouping governance items and fact cards  
-- Primary vs additional citation tiers (via `citation_relevance.py`)  
+- Primary vs additional vs **unsupported** citation tiers (via `citation_relevance.py`)  
+- **Support labels** on cards: strong / moderate / weak / unsupported  
 - System-inference block separated from direct quotes  
+- Risk dual-evidence warnings when classification lacks uploaded + legal support  
 - Standard disclaimer text  
 
 ### Output
@@ -167,10 +190,12 @@ Build commands, env vars, coding rules, and anti-patterns: see **Part 2** below 
 app.py                    Streamlit UI
 src/pipeline.py           orchestrator
 src/agents/               assessment, critic, presenter
-src/retrieval.py          RAG boundary
+src/retrieval.py          RAG boundary (scoped corpus queries)
+src/citation_validation.py  post-LLM citation repair
 src/citation_resolver.py  evidence cards
-src/citation_relevance.py scoring + tiers
+src/citation_relevance.py scoring + support tiers
 docs/                     architecture + judge docs
+tests/test_citation_*.py  unit tests (relevance + validation)
 ```
 
 ### Build / run

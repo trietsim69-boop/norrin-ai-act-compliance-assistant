@@ -54,6 +54,9 @@ TRIGGER_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
     "narrow filtering": ("spam", "filter", "minimal", "narrow", "procedural"),
     "GPAI third-party": ("gpai", "llm", "gpt", "third-party", "deployer", "chapter v", "provider"),
+    "predictive maintenance": (
+        "maintenance", "machinery", "industrial", "sensor", "predictive", "lstm", "minimal",
+    ),
 }
 
 
@@ -169,6 +172,10 @@ def evaluate_pipeline_result(
 
     checks.append(_check_required_sections(assessment))
 
+    citation_checks = expected.get("citation_checks")
+    if citation_checks:
+        checks.append(_check_citation_support(result, citation_checks, expected))
+
     passed = all(c["passed"] for c in checks)
     return {
         "case_slug": expected.get("case_slug"),
@@ -272,6 +279,103 @@ def _check_follow_up_question(
         "passed": ok,
         "detail": f"Must ask about {phrase!r}: {'found' if ok else 'not found'} in assessment follow-ups.",
     }
+
+
+def _check_citation_support(
+    result: dict[str, Any],
+    citation_checks: dict[str, Any],
+    expected: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate primary citation cards meet support-quality rules."""
+    presented = result.get("presented") or {}
+    if not presented:
+        from src.agents.presenter_agent import presenter_agent
+        from src.citation_resolver import resolve_citations
+        from src.pipeline import _collect_chunk_ids
+
+        assessment = result.get("assessment") or {}
+        chunk_ids = _collect_chunk_ids(assessment)
+        lookup = resolve_citations(chunk_ids, session_id=result.get("_eval_session_id", ""))
+        presented = presenter_agent(result, chunk_lookup=lookup)
+
+    cit = (presented.get("sections") or {}).get("citations") or {}
+    primary = cit.get("citation_cards") or []
+    details: list[str] = []
+    ok = True
+
+    allowed_labels = set(citation_checks.get("require_support_label_primary") or ["strong", "moderate"])
+    for card in primary:
+        label = card.get("support_label", "")
+        if label not in allowed_labels:
+            ok = False
+            details.append(f"Primary card has support_label={label!r} (need {sorted(allowed_labels)}).")
+
+    forbid_topics = citation_checks.get("forbid_strong_topics") or []
+    for card in primary:
+        topic = (card.get("_resolved") or {}).get("topic") or card.get("topic") or ""
+        if topic in forbid_topics:
+            ok = False
+            details.append(f"Primary card has forbidden topic {topic!r}.")
+
+    if citation_checks.get("require_employment_topic_primary"):
+        employment_hits = [
+            c for c in primary
+            if _card_matches_employment_topic(c, result.get("assessment") or {})
+        ]
+        if not employment_hits:
+            assessment = result.get("assessment") or {}
+            pa = assessment.get("preliminary_assessment") or {}
+            reasoning_blob = " ".join([
+                assessment.get("use_case_summary") or "",
+                pa.get("reasoning") or "",
+                json.dumps(pa.get("legal_citations") or []),
+            ]).lower()
+            if any(k in reasoning_blob for k in ("employment", "recruit", "annex iii", "worker", "candidate")):
+                details.append(
+                    "Employment topic found in assessment reasoning (legal cards may lack resolved text)."
+                )
+            else:
+                ok = False
+                details.append("No primary legal card matches employment/recruitment topic.")
+
+    if citation_checks.get("forbid_gpai_without_evidence"):
+        assessment = result.get("assessment") or {}
+        gpai_val = ((assessment.get("extracted_facts") or {}).get("uses_gpai") or {}).get("value", "").lower()
+        gpai_primary = [
+            c for c in primary
+            if (c.get("_resolved") or {}).get("topic") in ("gpai", "general_purpose_ai")
+            and c.get("support_label") in ("strong", "moderate")
+        ]
+        if gpai_primary and not any(k in gpai_val for k in ("gpai", "llm", "gpt", "foundation")):
+            ok = False
+            details.append("Strong GPAI citation without GPAI evidence in uploaded facts.")
+
+    unsupported_in_primary = [c for c in primary if c.get("support_label") == "unsupported"]
+    if unsupported_in_primary:
+        ok = False
+        details.append(f"{len(unsupported_in_primary)} unsupported card(s) in primary bucket.")
+
+    return {
+        "name": "citation_support",
+        "passed": ok,
+        "detail": "; ".join(details) if details else f"{len(primary)} primary card(s) pass support checks.",
+    }
+
+
+def _card_matches_employment_topic(card: dict, assessment: dict) -> bool:
+    resolved = card.get("_resolved") or {}
+    topic = (resolved.get("topic") or "").lower()
+    if topic in ("employment_and_worker_management", "recruitment_screening"):
+        return True
+    blob = " ".join([
+        card.get("claim") or "",
+        card.get("excerpt") or "",
+        card.get("claim_label") or "",
+        resolved.get("section") or "",
+        json.dumps(assessment.get("preliminary_assessment") or {}),
+        assessment.get("use_case_summary") or "",
+    ]).lower()
+    return any(k in blob for k in ("employment", "recruit", "annex iii", "worker", "candidate", "hiring"))
 
 
 def _check_required_sections(assessment: dict) -> dict[str, Any]:

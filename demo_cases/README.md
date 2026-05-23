@@ -27,10 +27,32 @@ With `MOCK_LLM=true`, the Assessment Agent picks fixtures from **keywords** in t
 | [`workplace_emotion_detection/`](workplace_emotion_detection/) | Art. 5(1)(f) workplace emotion | Prohibited / unacceptable |
 | [`spam_filter/`](spam_filter/) | Narrow classification | Minimal risk |
 | [`llm_report_generator/`](llm_report_generator/) | Chapter V GPAI deployer | GPAI obligations apply |
-
-**Not included:** predictive maintenance, generic API hackathon uploads — use manual description or your own files; outcomes depend on content (often minimal/unclear without safety-component context).
+| [`predictive_maintenance/`](predictive_maintenance/) | Industrial LSTM PM | Minimal risk |
 
 ---
+
+## `predictive_maintenance/` — Industrial predictive maintenance
+
+**Expected:** **Minimal risk** (not HR/recruitment; custom LSTM, not GPAI)
+
+### Files
+
+| File | Role |
+|------|------|
+| `technical_overview.md` | MachineGuard PM — sensors, LSTM, technicians review alerts |
+
+### Key signals
+
+Predictive maintenance, industrial, machinery, LSTM, sensors — **not** recruitment, **not** foundation model
+
+### Expected missing / follow-up themes
+
+- Safety component integration (Article 6)  
+- Deployment context  
+
+### Why useful
+
+Tests **citation correctness** — employment Annex III must **not** appear as strong primary evidence; weak/unsupported citations go to debug expander. Automated in trigger tests with `citation_checks`.
 
 ## `hr_screening/` — HR candidate screening
 

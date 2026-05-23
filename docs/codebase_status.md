@@ -1,6 +1,6 @@
 # Codebase status
 
-Living progress tracker. **Last updated:** 2026-05-23
+Living progress tracker. **Last updated:** 2026-05-24
 
 ---
 
@@ -10,8 +10,10 @@ Living progress tracker. **Last updated:** 2026-05-23
 |------|--------|
 | MVP steps 1–12 | **Complete** |
 | Streamlit regulatory console | **Complete** |
-| Citation resolver + relevance | **Complete** |
-| Trigger tests (mock, corpus loaded) | **5/5 pass** |
+| Citation validation + relevance + resolver | **Complete** |
+| Scoped corpus retrieval | **Complete** |
+| Trigger tests (mock, corpus loaded) | **6/6 pass** |
+| Citation unit tests | **13/13 pass** |
 | Production / legal certification | **Out of scope** |
 
 ---
@@ -25,16 +27,17 @@ Living progress tracker. **Last updated:** 2026-05-23
 - [x] Chroma uploaded + corpus collections (`vector_store.py`)  
 - [x] One-shot corpus loader (`scripts/load_corpus.py`) — ~1,874 chunks  
 - [x] Corpus metadata enrichment (`corpus_metadata.py`)  
-- [x] RAG retrieval — 8 standard queries + targeted pulls (`retrieval.py`)  
+- [x] RAG retrieval — standard queries + **scoped corpus queries** + targeted pulls (`retrieval.py`)  
 
 ### Agents & pipeline
 
-- [x] Assessment Agent — hybrid ReAct, structured JSON  
-- [x] Critic Agent — checklist, pass/fail, revision instruction  
-- [x] Presenter Agent — deterministic formatting (no LLM)  
+- [x] Assessment Agent — hybrid ReAct, structured JSON, citation discipline prompts  
+- [x] **Assessment-time citation validation** (`citation_validation.py`) — repair before Critic  
+- [x] Critic Agent — checklist incl. citation relevance; **cited chunk text** in prompt  
+- [x] Presenter Agent — support tiers, primary/weak/unsupported buckets  
 - [x] Pipeline orchestrator — one revision max, `history[]`  
-- [x] Citation resolver + relevance scoring  
-- [x] LLM wrapper + mock mode  
+- [x] Citation resolver + relevance scoring (0–1 support_score, legal topic routing)  
+- [x] LLM wrapper + mock mode (six demo fixtures incl. predictive maintenance)  
 
 ### UI (`app.py`)
 
@@ -46,12 +49,14 @@ Living progress tracker. **Last updated:** 2026-05-23
 - [x] Tabbed report: Overview, Assessment, Governance, Facts, Missing, Citations, Trace  
 - [x] Right column: System Context + agent timeline  
 - [x] Export Brief (JSON)  
-- [x] Human-readable citation sources; debug chunk IDs hidden  
+- [x] Citation cards: **Support** label, weak/unsupported warnings, debug chunk IDs  
+- [x] Unsupported citations hidden from Legal basis; shown in debug expander  
 
 ### Evaluation
 
-- [x] Five demo case folders (14 sample files)  
-- [x] `tests/expected_triggers.json`  
+- [x] Six demo case folders  
+- [x] `tests/expected_triggers.json` (incl. `predictive_maintenance`, `citation_checks`)  
+- [x] `tests/test_citation_relevance.py`, `tests/test_citation_validation.py`  
 - [x] `scripts/run_trigger_tests.py`  
 - [x] `src/evaluation.py`  
 
@@ -63,7 +68,6 @@ Living progress tracker. **Last updated:** 2026-05-23
 
 ## In progress
 
-- [ ] Citation “surrounding passage” UX (reduce confusing raw chunk expanders)  
 - [ ] Real-LLM regression runs documented with pass/fail log  
 
 ---
@@ -71,9 +75,9 @@ Living progress tracker. **Last updated:** 2026-05-23
 ## Not done / future
 
 - [ ] PDF/Markdown report export  
-- [ ] Bundled predictive-maintenance demo case + trigger entry  
 - [ ] Automated malicious / out-of-scope input trigger test  
 - [ ] Section-aware chunking for cleaner legal excerpts  
+- [ ] Structured per-claim legal citations in assessment JSON schema  
 - [ ] Deployment packaging (Streamlit Cloud / Docker)  
 - [ ] Persistent audit log storage across sessions  
 
@@ -83,20 +87,19 @@ Living progress tracker. **Last updated:** 2026-05-23
 
 | Issue | Impact | Workaround |
 |-------|--------|------------|
-| Full source text may start mid-section | Citations look “random” | Use excerpt + explanation; improve chunking later |
+| Full source text may start mid-section | Citations look “random” in expander | Use excerpt + support label; rely on claim-selected excerpt |
 | `MOCK_LLM` shell override | Confusing mode switches | Set `$env:MOCK_LLM` explicitly before run |
 | Live LLM latency | 2–5+ min per assessment | Use mock for demos |
-| Critic may still pass with imperfect cites (live) | Quality variance | Show Trace + human review disclaimer |
+| Flat `legal_citations` array | Hard to bind cite to sub-claim | Presenter + relevance infer claim context |
 | Sidebar + wide layout on small screens | Cramped UI | Widen browser; collapse sidebar |
 
 ---
 
 ## Next priorities
 
-1. Polish citation expander (surrounding context only)  
-2. Run `--real-llm` trigger tests and record results  
-3. Optional PDF export for judges  
-4. Add industrial PM demo case if time permits  
+1. Run `--real-llm` trigger tests and record results  
+2. Optional PDF export for judges  
+3. Per-claim citation structure in assessment JSON  
 
 ---
 
@@ -114,5 +117,6 @@ On major changes, update this file in the same commit:
 ## Related docs
 
 - Architecture: [`architecture.md`](architecture.md)  
+- Citations: [`citation_and_evidence.md`](citation_and_evidence.md)  
 - Setup: [`setup_and_run.md`](setup_and_run.md)  
 - Evaluation: [`evaluation_and_trigger_tests.md`](evaluation_and_trigger_tests.md)  

@@ -6,7 +6,11 @@
     "expected_risk_direction": "high_risk",
     "must_ask_about": ["human oversight", "decision impact", "provider/deployer role"],
     "min_legal_citations": 1,
-    "expect_critic_stage": true
+    "expect_critic_stage": true,
+    "citation_checks": {
+      "require_employment_topic_primary": true,
+      "require_support_label_primary": ["strong", "moderate"]
+    }
   },
   {
     "case_slug": "customer_chatbot",
@@ -43,5 +47,19 @@
     "must_ask_about": ["provider compliance", "human review"],
     "min_legal_citations": 1,
     "expect_critic_stage": true
+  },
+  {
+    "case_slug": "predictive_maintenance",
+    "case_name": "Industrial predictive maintenance",
+    "expected_trigger": "predictive maintenance",
+    "expected_risk_direction": "minimal_risk",
+    "must_ask_about": ["safety component", "deployment context"],
+    "min_legal_citations": 1,
+    "expect_critic_stage": true,
+    "citation_checks": {
+      "forbid_strong_topics": ["employment_and_worker_management"],
+      "require_support_label_primary": ["strong", "moderate"],
+      "forbid_gpai_without_evidence": true
+    }
   }
 ]

@@ -449,6 +449,11 @@ def _clean_chunk_text(text: str) -> str:
     return text
 
 
+def split_sentences(text: str) -> list[str]:
+    """Public wrapper — split chunk text into readable sentences."""
+    return _split_sentences(text)
+
+
 def _split_sentences(text: str) -> list[str]:
     cleaned = _clean_chunk_text(text)
     if not cleaned:

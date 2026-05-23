@@ -1,3 +1,5 @@
+import re
+
 from src.config import TOP_K
 from src.vector_store import get_uploaded_collection, get_corpus_collection
 from src.corpus_metadata import infer_retrieval_targets
@@ -16,6 +18,42 @@ STANDARD_QUERIES = [
     "What sector or domain does this AI system operate in?",
     "Does a human make the final decision or does the AI output determine outcomes?",
 ]
+
+# Always run these against both collections
+_CORE_QUERIES = [
+    STANDARD_QUERIES[0],  # purpose
+    STANDARD_QUERIES[1],  # affected persons
+    STANDARD_QUERIES[6],  # sector
+    STANDARD_QUERIES[7],  # human oversight / final decision
+]
+
+_CONDITIONAL_CORPUS_QUERIES: list[tuple[tuple[str, ...], str]] = [
+    (("recruit", "hiring", "candidate", "employment", "worker", "hr", "applicant", "screening"), STANDARD_QUERIES[2]),
+    (("chatbot", "conversational", "customer support", "virtual assistant"), STANDARD_QUERIES[3]),
+    (("emotion", "facial", "biometric", "affect", "mood"), STANDARD_QUERIES[4]),
+    (("gpt", "llm", "large language model", "general purpose", "claude", "openai", "foundation"), STANDARD_QUERIES[5]),
+]
+
+
+def select_assessment_queries(uploaded_chunks: list[dict]) -> list[str]:
+    """
+    Build a scoped query list from uploaded evidence signals.
+
+    Core queries always run. Domain-specific corpus queries run only when
+    uploaded text suggests that domain (avoids flooding PM cases with HR law).
+    """
+    blob = " ".join(c.get("text", "") for c in uploaded_chunks).lower()
+    queries = list(_CORE_QUERIES)
+    for keywords, query in _CONDITIONAL_CORPUS_QUERIES:
+        if any(re.search(rf"\b{re.escape(kw)}\b", blob) for kw in keywords):
+            if query not in queries:
+                queries.append(query)
+    return queries
+
+
+def select_corpus_queries(uploaded_chunks: list[dict]) -> list[str]:
+    """Queries used for corpus-only retrieval (scoped to uploaded signals)."""
+    return select_assessment_queries(uploaded_chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +106,10 @@ def retrieve_combined_context(
 ) -> dict:
     """
     Run multiple queries against both collections and return deduplicated results.
-    Returns a dict with 'uploaded_chunks' and 'corpus_chunks'.
+
+    Uploaded collection: all provided queries (or STANDARD_QUERIES).
+    Corpus collection: scoped queries derived from uploaded evidence signals
+    so unrelated domains (e.g. HR Annex III) are not retrieved for every case.
     """
     if not queries:
         queries = STANDARD_QUERIES
@@ -85,13 +126,15 @@ def retrieve_combined_context(
                 seen_uploaded.add(cid)
                 uploaded_chunks.append(chunk)
 
+    corpus_queries = select_corpus_queries(uploaded_chunks)
+
+    for q in corpus_queries:
         for chunk in retrieve_ai_act_context(q, top_k=top_k):
             cid = chunk["chunk_id"]
             if cid not in seen_corpus:
                 seen_corpus.add(cid)
                 corpus_chunks.append(chunk)
 
-    # Metadata-targeted corpus retrieval from uploaded-document signals
     for target in infer_retrieval_targets(uploaded_chunks):
         for chunk in retrieve_ai_act_context(
             target["query"],

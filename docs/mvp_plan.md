@@ -56,7 +56,7 @@ Give compliance and product teams a **first-pass, citation-backed** read on whet
 
 - Cleaner citation “surrounding passage” (section-aware chunks)  
 - PDF/Markdown export of full report  
-- Additional demo paths (e.g. industrial predictive maintenance as first-class fixture)  
+- Structured per-claim legal citations in assessment JSON  
 - Real-LLM regression suite in CI  
 - Scope gate for malicious or clearly out-of-scope prompts  
 - Streamlit Cloud / container deployment  
@@ -66,8 +66,9 @@ Give compliance and product teams a **first-pass, citation-backed** read on whet
 
 ## Success criteria (hackathon)
 
-- Demonstrates **regulatory grounding** via corpus RAG + citation cards  
+- Demonstrates **regulatory grounding** via corpus RAG + citation cards with support labels  
 - Demonstrates **multi-agent design** with visible stages and revision  
+- **No fake strong citations** — validation + relevance downgrades weak sources  
 - Usable **UX** for upload → report → trace → citations  
 - Honest **uncertainty** and missing-info handling  
 - Repeatable **demo cases** and trigger tests  

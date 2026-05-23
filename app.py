@@ -979,6 +979,10 @@ def _render_agent_timeline(
 def _render_fact_card(fact: dict) -> None:
     labels = [_user_facing_source(r) for r in (fact.get("evidence_resolved") or [])]
     evidence = "; ".join(dict.fromkeys(l for l in labels if l and l != "—")) or "—"
+    weak_evidence = [
+        r for r in (fact.get("evidence_resolved") or [])
+        if r.get("support_label") in ("weak", "unsupported")
+    ]
     with st.container(border=True):
         st.markdown(
             f'<p style="margin:0;font-size:0.72rem;font-weight:600;color:#b8860b;'
@@ -987,6 +991,8 @@ def _render_fact_card(fact: dict) -> None:
         )
         st.markdown(f"**{fact.get('value', '—')}**")
         st.caption(f"Confidence: {fact.get('confidence', '—')} · Source: {evidence}")
+        if weak_evidence:
+            st.caption("⚠ Some cited sources have weak or unsupported alignment with this fact.")
 
 
 def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
@@ -998,10 +1004,15 @@ def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
     explanation = (card.get("relevance_explanation") or "").strip()
     layer = card.get("law_layer_label")
     topic = card.get("topic_label")
+    support_label = (card.get("support_label") or "").strip()
+    warning = (card.get("warning") or "").strip()
 
     with st.container(border=True):
         if category:
             st.caption(category.upper())
+        if support_label:
+            label_title = support_label.replace("_", " ").title()
+            st.markdown(f"**Support:** {label_title}")
         if show_claim and claim:
             st.markdown(f"**Claim:** {claim}")
         st.markdown(f"**Source:** {source}")
@@ -1010,6 +1021,13 @@ def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
             st.markdown(f"**Legal layer:** {layer}")
         if topic:
             st.markdown(f"**Topic:** {topic}")
+        if warning:
+            st.markdown(
+                f'<div style="background:#fff4c2;border:1px solid #d8c87a;padding:0.45rem 0.65rem;'
+                f'border-radius:4px;margin:0.35rem 0;font-size:0.85rem;color:#5c4a00;">'
+                f'{_esc(warning)}</div>',
+                unsafe_allow_html=True,
+            )
         if excerpt:
             st.markdown(f'*"{excerpt}"*')
         elif show_claim:
@@ -1026,6 +1044,8 @@ def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
             with st.expander("Debug — chunk ID"):
                 st.code(chunk_id)
                 st.caption(f"Resolver: {resolved.get('resolver', '—')}")
+                if card.get("support_score") is not None:
+                    st.caption(f"Support score: {card.get('support_score')}")
 
 
 def _render_warning_cards(warnings: list[dict]) -> None:
@@ -1112,19 +1132,9 @@ def _render_tab_assessment(pa_section: dict, ai_label: str, risk_label: str, con
     if resolved_cites:
         st.markdown("**Legal basis**")
         for r in resolved_cites:
-            _render_citation_card(
-                {
-                    "claim": "Legal basis for preliminary assessment",
-                    "source": r.get("source") or r.get("source_label"),
-                    "evidence_type": r.get("evidence_type"),
-                    "excerpt": r.get("excerpt"),
-                    "relevance_explanation": r.get("relevance_explanation"),
-                    "law_layer_label": r.get("law_layer_label"),
-                    "topic_label": r.get("topic_label"),
-                    "_resolved": r,
-                },
-                show_claim=False,
-            )
+            if r.get("support_label") == "unsupported":
+                continue
+            _render_citation_card(r, show_claim=False)
 
 
 def _render_tab_governance(sections: dict) -> None:
@@ -1222,6 +1232,7 @@ def _render_tab_citations(sections: dict) -> None:
     cit = sections.get("citations", {})
     primary = cit.get("citation_cards") or cit.get("claims_table") or []
     additional = cit.get("additional_evidence") or []
+    unsupported = cit.get("unsupported_or_debug_evidence") or []
     inference = cit.get("system_inference") or {}
 
     st.markdown("**System inference (conclusions, not direct quotes)**")
@@ -1243,6 +1254,12 @@ def _render_tab_citations(sections: dict) -> None:
     if additional:
         with st.expander(f"Additional evidence ({len(additional)} weaker matches)"):
             for row in additional:
+                _render_citation_card(row)
+
+    if unsupported:
+        with st.expander(f"Unsupported / debug evidence ({len(unsupported)})"):
+            st.caption("These citations do not directly support their claims and are hidden from primary views.")
+            for row in unsupported:
                 _render_citation_card(row)
 
 
@@ -1599,7 +1616,7 @@ critic_pass = critic.get("pass")
 critic_label = "Pass" if critic_pass else "Revise" if critic_pass is False else "—"
 revision_triggered = bool(meta.get("revision_triggered") or pipe_meta.get("revision_triggered"))
 status_label = f"Draft · {'v2' if revision_triggered else 'v1'}"
-legal_count = len(pa_section.get("legal_citations_resolved") or pa_section.get("legal_citations") or [])
+legal_count = len(pa_section.get("legal_citations_resolved") or [])
 
 summary = sections.get("use_case_summary", {})
 summary_body = (summary.get("body") or "").strip()

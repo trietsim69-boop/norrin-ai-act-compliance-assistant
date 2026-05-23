@@ -24,8 +24,9 @@ Each agent has a **distinct role**, **structured JSON contract**, and **autonomo
 
 `retrieve_combined_context()` gathers evidence **before** any agent runs.
 
-- Uploaded chunks: session-scoped  
-- Corpus chunks: global AI Act + guidance  
+- Uploaded chunks: all standard queries, session-scoped  
+- Corpus chunks: **scoped** — core queries + domain queries only when uploaded text signals match (employment, chatbot, emotion, GPAI)  
+- **`infer_retrieval_targets`** — metadata-driven extra corpus pulls from uploaded content  
 - No agent sees the vector DB directly  
 
 ### 1 — Assessment Agent (v1)
@@ -34,13 +35,15 @@ Each agent has a **distinct role**, **structured JSON contract**, and **autonomo
 
 **Output:** Large structured JSON (see [`../AGENTS.md`](../AGENTS.md)).
 
+**Post-processing:** `validate_and_repair_assessment()` strips invalid citations, enforces source-type rules, and records repairs in `_meta`.
+
 **Stored as:** `history[stage=assessment_v1]`
 
 ### 2 — Critic Agent (v1)
 
 **Decides:** pass or fail; issue categories; one revision instruction; missing questions for humans.
 
-**Input:** Assessment JSON + same evidence chunks.
+**Input:** Assessment JSON + same evidence chunks + **full text of cited chunks** (for relevance review).
 
 **Does not:** rewrite the assessment or retrieve new data.
 
@@ -58,15 +61,19 @@ Each agent has a **distinct role**, **structured JSON contract**, and **autonomo
 
 **Flag:** `_meta.revision_triggered = true`
 
-### 4 — Citation resolution
+### 4 — Citation resolution + relevance
 
-Collect all `chunk_id` references from final assessment → `resolve_citations()` → lookup map for Presenter and UI.
+Collect all `chunk_id` references from final assessment → `resolve_citations()` → lookup map.
+
+Then **`enrich_citation_row()`** scores each claim↔excerpt pair and assigns **support labels** (strong / moderate / weak / unsupported).
 
 Not an agent — deterministic + Chroma lookups.
 
 ### 5 — Presenter Agent
 
-**Decides (formatting only):** section layout, warning severity, citation tiers, disclaimer.
+**Decides (formatting only):** section layout, warning severity, citation tier buckets, disclaimer.
+
+**Citation buckets:** `citation_cards` (strong+moderate), `additional_evidence` (weak), `unsupported_or_debug_evidence`.
 
 **Does not:** call LLM or add new legal conclusions.
 
@@ -92,12 +99,15 @@ Intermediate artifacts are preserved in **`history[]`** for Audit Logs and Trace
 
 ## How unsupported claims are caught
 
-1. **Assessment prompt** requires corpus `chunk_id` on legal claims and upload IDs on facts.  
-2. **Critic checklist** explicitly checks citation support and relevance.  
-3. **Issues array** names claim + problem + severity (`citation`, `confidence`, `contradiction`, …).  
-4. **Revision instruction** tells Assessment Agent what to fix (e.g. add Art. 6 cite, lower confidence).  
-5. **Presenter warnings** surface critic fail, low confidence, GPAI flags to the user.  
-6. **UI** separates **system inference** (agent conclusions) from **direct quotes** (citation cards).  
+1. **Retrieval scoping** — corpus queries limited by uploaded signals (fewer wrong-domain chunks in context).  
+2. **Assessment prompt** requires corpus `chunk_id` on legal claims and upload IDs on facts; rules 6–10 forbid weak/over-citation.  
+3. **`validate_and_repair_assessment()`** — programmatic strip of invalid IDs **before** Critic (source-type, topic mismatch, support threshold in live mode).  
+4. **Critic checklist** checks citation support, relevance, and source separation; receives **cited chunk text**.  
+5. **Issues array** names claim + problem + severity (`citation`, `citation_relevance`, `confidence`, …).  
+6. **Revision instruction** tells Assessment Agent what to fix.  
+7. **`enrich_citation_row()`** — downstream score; weak/unsupported never shown as primary.  
+8. **Presenter warnings** surface critic fail, low confidence, dual-evidence gaps.  
+9. **UI** — support labels, warnings, unsupported expander; system inference separated from quotes.  
 
 The Critic does **not** guarantee legal correctness — it enforces **process quality** (grounding, qualification, structure).
 

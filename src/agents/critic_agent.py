@@ -23,6 +23,10 @@ import json
 from typing import Any
 
 from src.llm import call_llm
+from src.citation_validation import (
+    build_evidence_index,
+    format_cited_chunks_for_critic,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -41,6 +45,13 @@ EVALUATION CHECKLIST (run every check)
 6. Legal safety: no statements that read as final legal advice. Qualified language used ("appears to", "likely", "may fall within").
 7. Source relevance: cited corpus chunks are actually relevant to the claimed risk category.
 8. Contradictions: facts in the assessment do not contradict each other or the evidence.
+9. Citation relevance: For each cited chunk_id, ask "Does this chunk DIRECTLY support the specific claim?"
+   - Predictive maintenance must NOT cite employment/recruitment Annex III as primary support for minimal risk.
+   - HR screening SHOULD cite employment/recruitment Annex III for high-risk reasoning.
+   - GPAI claims require evidence of foundation model / third-party LLM use — custom LSTM alone is NOT GPAI.
+   - Minimal risk claims must explain why Annex III categories are NOT met, not cite unrelated high-risk lists.
+10. Source type separation: corpus chunk_ids must not appear in extracted_facts.evidence; uploaded chunk_ids must not be sole support for legal_citations.
+11. Over-citation: flag chunk_ids cited only because they appeared in retrieval, not because they prove the claim.
 
 AUTONOMOUS DECISIONS YOU MAKE
 - Decide pass vs fail.
@@ -53,7 +64,7 @@ OUTPUT — a single valid JSON object with EXACTLY this shape:
 {
   "pass": true | false,
   "issues": [
-    {"category": "citation|confidence|legal_safety|contradiction|missing_section|relevance",
+    {"category": "citation|confidence|legal_safety|contradiction|missing_section|relevance|citation_relevance",
      "claim": "...",
      "problem": "...",
      "severity": "low|medium|high"}
@@ -126,6 +137,10 @@ def _build_user_message(
 
     parts.append("## Available corpus chunk_ids (for citation validation)")
     parts.append(_format_chunk_index(corpus_chunks))
+
+    evidence_index = build_evidence_index(uploaded_chunks, corpus_chunks)
+    parts.append("## Cited chunk text (verify direct support for each claim)")
+    parts.append(format_cited_chunks_for_critic(assessment, evidence_index))
 
     parts.append(
         "## Instructions\n"
@@ -234,6 +249,60 @@ def _pick_mock_fixture(assessment: dict) -> dict:
                 "severity": "medium",
             })
 
+    # Heuristic 5: corpus chunk_ids in uploaded fact evidence
+    for name, fact in facts.items():
+        if not isinstance(fact, dict):
+            continue
+        for cid in fact.get("evidence") or []:
+            if str(cid).lower().startswith("corpus"):
+                issues.append({
+                    "category": "citation_relevance",
+                    "claim": f"extracted_facts.{name}",
+                    "problem": "Corpus chunk cited as support for an uploaded-system fact.",
+                    "severity": "high",
+                })
+
+    # Heuristic 6: industrial/maintenance case citing employment Annex III for minimal risk
+    use_summary = (assessment.get("use_case_summary") or "").lower()
+    sector = (facts.get("sector") or {}).get("value", "").lower()
+    context = f"{use_summary} {sector}"
+    industrial = any(k in context for k in ("maintenance", "machinery", "industrial", "sensor", "predictive"))
+    if industrial and risk_tier in ("minimal_risk", "unclear"):
+        for cid in legal_citations:
+            cid_lower = str(cid).lower()
+            if any(k in cid_lower for k in ("employment", "recruit", "annex_iii")):
+                issues.append({
+                    "category": "citation_relevance",
+                    "claim": "legal_citations for minimal-risk industrial case",
+                    "problem": (
+                        "Employment/recruitment Annex III citation is weak support for "
+                        "predictive maintenance minimal-risk reasoning."
+                    ),
+                    "severity": "medium",
+                })
+                break
+
+    # Heuristic 7: GPAI risk tier without GPAI evidence in facts
+    if risk_tier == "gpai_obligations":
+        gpai_val = (facts.get("uses_gpai") or {}).get("value", "").lower()
+        if not any(k in gpai_val for k in ("gpai", "llm", "gpt", "foundation", "general-purpose", "general purpose")):
+            issues.append({
+                "category": "citation_relevance",
+                "claim": "risk_tier = gpai_obligations",
+                "problem": "GPAI obligations claimed but uploaded facts do not mention GPAI/LLM/foundation models.",
+                "severity": "high",
+            })
+
+    # Heuristic 8: custom LSTM labeled as GPAI in uses_gpai fact
+    gpai_val = (facts.get("uses_gpai") or {}).get("value", "").lower()
+    if "lstm" in gpai_val and "gpai" in gpai_val and "foundation" not in gpai_val and "llm" not in gpai_val:
+        issues.append({
+            "category": "citation_relevance",
+            "claim": "extracted_facts.uses_gpai",
+            "problem": "Custom LSTM should not be labeled as GPAI without foundation-model evidence.",
+            "severity": "medium",
+        })
+
     # Always surface useful follow-up questions
     missing_questions = _default_followups(assessment)
 
@@ -264,6 +333,13 @@ def _default_followups(assessment: dict) -> list[str]:
 
 
 def _draft_revision_instruction(issues: list[dict], risk_tier: str) -> str:
+    if any(i["category"] == "citation_relevance" for i in issues):
+        return (
+            "Remove or replace citations that do not DIRECTLY support each claim. "
+            "Do not cite employment/recruitment Annex III for industrial predictive maintenance. "
+            "Do not use corpus chunks for uploaded facts or uploaded chunks for legal rules. "
+            "Lower confidence where direct support is missing."
+        )
     if any(i["category"] == "citation" for i in issues):
         return (
             "Attach explicit corpus chunk_ids to every legal claim, lower the "

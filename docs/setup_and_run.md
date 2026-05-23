@@ -104,10 +104,12 @@ Open the URL printed in the terminal (e.g. http://localhost:8521).
 ```powershell
 python -m scripts.run_trigger_tests
 python -m scripts.run_trigger_tests --case hr_screening --verbose
+python -m scripts.run_trigger_tests --case predictive_maintenance --verbose
+python -m pytest tests/test_citation_relevance.py tests/test_citation_validation.py -v
 python -m scripts.run_trigger_tests --real-llm
 ```
 
-Requires corpus loaded. Mock mode: target **5/5 pass**.
+Requires corpus loaded. Mock mode: target **6/6 pass**.
 
 Details: [`evaluation_and_trigger_tests.md`](evaluation_and_trigger_tests.md)
 

@@ -10,12 +10,115 @@ from __future__ import annotations
 import re
 from typing import Any
 
-PRIMARY_RELEVANCE_THRESHOLD = 55
+from src.citation_resolver import split_sentences
+
+SUPPORT_STRONG = 0.70
+SUPPORT_MODERATE = 0.50
+SUPPORT_WEAK = 0.30
+PRIMARY_MIN_SCORE = 0.50
+STRONG_MIN_SCORE = 0.70
+SENTENCE_FIT_MIN = 0.15
+
+PRIMARY_RELEVANCE_THRESHOLD = int(PRIMARY_MIN_SCORE * 100)
+
+_UPLOADED_TYPES = {"uploaded_document", "user_input"}
+_LEGAL_TYPES = {"regulation", "official_guidance"}
 
 _EVIDENCE_CATEGORY_LABELS = {
     "supported_fact": "Supported fact",
     "regulatory_reference": "Regulatory reference",
     "governance_note": "Governance note",
+}
+
+_WEAK_WARNING = (
+    "This source is related but does not directly prove the claim."
+)
+
+LEGAL_TOPIC_ROUTES: dict[str, dict[str, Any]] = {
+    "ai_system_definition": {
+        "sections": ["Article 3"],
+        "topics": ["ai_system_definition"],
+        "law_layers": ["definitions"],
+        "keywords": ("ai system", "infer", "learning", "model", "definition"),
+    },
+    "prohibited_practices": {
+        "sections": ["Article 5"],
+        "topics": ["prohibited_practices"],
+        "law_layers": ["prohibited_practices"],
+        "keywords": ("prohibited", "unacceptable", "practice"),
+    },
+    "employment_recruitment": {
+        "sections": ["Annex III"],
+        "topics": ["employment_and_worker_management", "recruitment_screening"],
+        "law_layers": ["high_risk_annex"],
+        "keywords": ("employment", "recruit", "recruitment", "hiring", "worker", "candidate"),
+    },
+    "safety_component": {
+        "sections": ["Article 6"],
+        "topics": ["critical_infrastructure", "safety_component", "predictive_maintenance"],
+        "law_layers": ["high_risk_annex"],
+        "keywords": ("safety component", "critical infrastructure", "machinery"),
+    },
+    "transparency": {
+        "sections": ["Article 50"],
+        "topics": ["transparency"],
+        "law_layers": ["transparency"],
+        "keywords": ("transparency", "disclosure", "inform", "chatbot"),
+    },
+    "gpai": {
+        "sections": ["Chapter V"],
+        "topics": ["general_purpose_ai", "gpai"],
+        "law_layers": ["gpai"],
+        "keywords": ("general-purpose", "general purpose", "gpai", "foundation model", "llm"),
+    },
+    "human_oversight": {
+        "sections": ["Article 14"],
+        "topics": ["human_oversight"],
+        "law_layers": ["core_rules"],
+        "keywords": ("human oversight", "human intervention", "supervision"),
+    },
+    "data_governance": {
+        "sections": ["Article 10"],
+        "topics": ["data_governance"],
+        "law_layers": ["core_rules"],
+        "keywords": ("data governance", "training data", "data quality"),
+    },
+    "documentation": {
+        "sections": ["Article 11"],
+        "topics": ["documentation"],
+        "law_layers": ["core_rules"],
+        "keywords": ("technical documentation", "documentation"),
+    },
+    "robustness": {
+        "sections": ["Article 15"],
+        "topics": ["robustness", "accuracy"],
+        "law_layers": ["core_rules"],
+        "keywords": ("accuracy", "robustness", "cybersecurity"),
+    },
+    "high_risk_annex": {
+        "sections": ["Annex III", "Article 6"],
+        "topics": ["high_risk_annex"],
+        "law_layers": ["high_risk_annex"],
+        "keywords": ("high-risk", "high risk", "annex iii"),
+    },
+    "risk_classification": {
+        "sections": ["Annex III", "Article 6"],
+        "topics": [],
+        "law_layers": ["high_risk_annex", "core_rules"],
+        "keywords": ("risk", "classification", "minimal", "high-risk"),
+    },
+}
+
+_USE_CASE_TOPICS = {
+    "predictive_maintenance": (
+        "maintenance", "machinery", "industrial", "sensor", "engine", "equipment", "predictive", "lstm",
+    ),
+    "hr_screening": (
+        "recruit", "recruitment", "hiring", "applicant", "candidate", "employment", "hr", "screening",
+    ),
+    "gpai_use": (
+        "gpai", "llm", "gpt", "foundation model", "general-purpose", "general purpose", "third-party",
+    ),
 }
 
 
@@ -25,7 +128,7 @@ def enrich_citation_row(
     claim_type: str,
     assessment: dict,
 ) -> dict:
-    """Add claim label, relevance score, explanation, category, and display tier."""
+    """Add claim label, support score, explanation, category, and display tier."""
     pa = assessment.get("preliminary_assessment") or {}
     resolved = row.get("_resolved") or {}
 
@@ -39,14 +142,45 @@ def enrich_citation_row(
         claim_label = _legal_citation_label(resolved, pa)
         category = "regulatory_reference"
 
-    score = _score_relevance(
+    full_text = (
+        row.get("full_text")
+        or resolved.get("full_text")
+        or resolved.get("text")
+        or ""
+    )
+    claim_text = row.get("claim", claim_label)
+    excerpt, sentence_fit = select_claim_excerpt(
+        full_text,
+        claim_text,
+        metadata=resolved,
+    )
+    if excerpt:
+        row = {**row, "excerpt": excerpt}
+        if resolved:
+            resolved = {**resolved, "excerpt": excerpt}
+            row["_resolved"] = resolved
+
+    support_score, source_match_reason, components = _compute_support_score(
         claim_type=claim_type,
         claim_label=claim_label,
+        claim_text=claim_text,
         row=row,
         resolved=resolved,
         pa=pa,
         assessment=assessment,
+        sentence_fit=sentence_fit,
+        excerpt=excerpt,
     )
+
+    support_label = _label_from_score(support_score)
+    support_reason = _build_support_reason(
+        support_label=support_label,
+        source_match_reason=source_match_reason,
+        components=components,
+    )
+    warning = _build_warning(support_label, source_match_reason)
+    display_tier = _display_tier_from_label(support_label)
+
     explanation = _build_relevance_explanation(
         claim_type=claim_type,
         claim_label=claim_label,
@@ -54,7 +188,8 @@ def enrich_citation_row(
         resolved=resolved,
         pa=pa,
         assessment=assessment,
-        score=score,
+        support_label=support_label,
+        support_reason=support_reason,
     )
 
     enriched = {
@@ -63,11 +198,140 @@ def enrich_citation_row(
         "claim_label": claim_label,
         "evidence_category": category,
         "evidence_category_label": _EVIDENCE_CATEGORY_LABELS.get(category, category),
-        "relevance_score": score,
+        "support_score": round(support_score, 3),
+        "support_label": support_label,
+        "support_reason": support_reason,
+        "source_match_reason": source_match_reason,
+        "warning": warning,
+        "relevance_score": int(round(support_score * 100)),
         "relevance_explanation": explanation,
-        "display_tier": "primary" if score >= PRIMARY_RELEVANCE_THRESHOLD else "additional",
+        "display_tier": display_tier,
     }
     return enriched
+
+
+def select_claim_excerpt(
+    full_text: str,
+    claim: str,
+    *,
+    metadata: dict | None = None,
+    max_chars: int = 280,
+) -> tuple[str, float]:
+    """Pick 1–3 sentences from full_text with best claim overlap."""
+    sentences = split_sentences(full_text)
+    if not sentences:
+        return "", 0.0
+
+    claim_words = set(_keywords(claim))
+    claim_entities = set(_entities(claim))
+    if not claim_words and not claim_entities:
+        return "", 0.0
+
+    best_score = 0.0
+    best_text = ""
+    best_idx = 0
+
+    for idx, sentence in enumerate(sentences):
+        score = _sentence_overlap_score(sentence, claim_words, claim_entities)
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+            best_text = sentence
+
+    if best_score < SENTENCE_FIT_MIN:
+        return "", best_score
+
+    selected = [best_text]
+    total_len = len(best_text)
+    for neighbor_idx in (best_idx - 1, best_idx + 1):
+        if 0 <= neighbor_idx < len(sentences) and len(selected) < 3:
+            neighbor = sentences[neighbor_idx]
+            if total_len + len(neighbor) + 1 <= max_chars:
+                if neighbor_idx < best_idx:
+                    selected.insert(0, neighbor)
+                else:
+                    selected.append(neighbor)
+                total_len += len(neighbor) + 1
+
+    excerpt = " ".join(selected).strip()
+    if len(excerpt) > max_chars:
+        cut = excerpt[:max_chars]
+        if " " in cut:
+            cut = cut[: cut.rfind(" ")]
+        excerpt = cut.rstrip(",;: ") + "…"
+    elif excerpt and not excerpt.endswith((".", "!", "?")):
+        excerpt = excerpt.rstrip(",;: ") + "…"
+
+    section = (metadata or {}).get("section") or (metadata or {}).get("article") or ""
+    if section and section.lower() not in excerpt.lower() and len(excerpt) < max_chars - len(section) - 4:
+        pass
+
+    return excerpt, best_score
+
+
+def validate_risk_classification_evidence(
+    assessment: dict,
+    enriched_rows: list[dict],
+) -> dict[str, Any]:
+    """Check risk tier has both uploaded facts and matching legal references."""
+    pa = assessment.get("preliminary_assessment") or {}
+    risk_tier = pa.get("risk_tier", "")
+    if not risk_tier or risk_tier == "unclear":
+        return {"ok": True, "warnings": []}
+
+    strong_labels = {"strong", "moderate"}
+    uploaded_ok = any(
+        r.get("evidence_category") == "supported_fact"
+        and r.get("support_label") in strong_labels
+        for r in enriched_rows
+    )
+    legal_ok = any(
+        r.get("evidence_category") == "regulatory_reference"
+        and r.get("support_label") in strong_labels
+        for r in enriched_rows
+    )
+
+    warnings: list[str] = []
+    if not uploaded_ok:
+        warnings.append(
+            "Risk classification lacks strong uploaded-document evidence about the AI system."
+        )
+    if not legal_ok:
+        warnings.append(
+            "Risk classification lacks strong regulatory citations matching the claimed category."
+        )
+    if risk_tier == "gpai_obligations":
+        gpai_fact = (assessment.get("extracted_facts") or {}).get("uses_gpai") or {}
+        gpai_value = (gpai_fact.get("value") or "").lower()
+        if not any(k in gpai_value for k in _USE_CASE_TOPICS["gpai_use"]):
+            warnings.append(
+                "GPAI obligations claimed but uploaded facts do not mention GPAI, LLM, or foundation models."
+            )
+
+    return {
+        "ok": uploaded_ok and legal_ok,
+        "uploaded_evidence_ok": uploaded_ok,
+        "legal_evidence_ok": legal_ok,
+        "warnings": warnings,
+    }
+
+
+def score_citation_for_fact(
+    claim: str,
+    resolved: dict,
+    assessment: dict,
+) -> dict[str, Any]:
+    """Score a resolved citation card against a fact claim (for fact section cards)."""
+    row = {"claim": claim, "_resolved": resolved, "excerpt": resolved.get("excerpt", "")}
+    enriched = enrich_citation_row(row, claim_type="uploaded_fact", assessment=assessment)
+    return {
+        "support_score": enriched.get("support_score"),
+        "support_label": enriched.get("support_label"),
+        "support_reason": enriched.get("support_reason"),
+        "source_match_reason": enriched.get("source_match_reason"),
+        "warning": enriched.get("warning"),
+        "excerpt": enriched.get("excerpt"),
+    }
 
 
 def build_system_inference(assessment: dict) -> dict:
@@ -129,19 +393,22 @@ def _legal_citation_label(resolved: dict, pa: dict) -> str:
     section = (resolved.get("section") or "").lower()
     excerpt = (resolved.get("excerpt") or "").lower()
     source = (resolved.get("source_label") or "").lower()
+    topic = (resolved.get("topic") or "").lower()
     risk = pa.get("risk_tier", "")
 
-    if "article 3" in section or ("definition" in source and "ai system" in source):
+    if "article 3" in section or topic == "ai_system_definition":
         return "AI system definition"
     if "article 5" in section or "prohibited" in source or "prohibited" in excerpt:
         return "Prohibited-practice check"
+    if topic in ("employment_and_worker_management", "recruitment_screening"):
+        return "Employment / HR high-risk area check"
     if "annex iii" in section or "annex iii" in excerpt:
         return "High-risk / Annex III check"
     if "article 6" in section or ("high-risk" in excerpt and "annex" in excerpt):
         return "High-risk / Annex III check"
     if "article 50" in section or "transparency" in excerpt:
         return "Transparency obligations check"
-    if "gpai" in excerpt or "general-purpose" in excerpt or "general purpose" in excerpt:
+    if "gpai" in excerpt or "general-purpose" in excerpt or topic in ("gpai", "general_purpose_ai"):
         return "GPAI obligations check"
     if "safety component" in excerpt or "safety components" in excerpt:
         return "Safety-component uncertainty"
@@ -157,105 +424,370 @@ def _legal_citation_label(resolved: dict, pa: dict) -> str:
     return "Regulatory reference"
 
 
+def _infer_claim_topic(
+    claim_type: str,
+    claim_label: str,
+    assessment: dict,
+) -> str:
+    label_lower = claim_label.lower()
+    use_context = _detect_use_case_context(assessment)
+
+    if claim_type == "uploaded_fact":
+        if "gpai" in label_lower or "uses gpai" in label_lower:
+            return "gpai"
+        return use_context or "general"
+
+    topic_map = (
+        ("ai system definition", "ai_system_definition"),
+        ("prohibited", "prohibited_practices"),
+        ("employment", "employment_recruitment"),
+        ("hr high-risk", "employment_recruitment"),
+        ("annex iii", "high_risk_annex"),
+        ("high-risk", "high_risk_annex"),
+        ("transparency", "transparency"),
+        ("gpai", "gpai"),
+        ("safety-component", "safety_component"),
+        ("risk classification", "risk_classification"),
+    )
+    for needle, topic_key in topic_map:
+        if needle in label_lower:
+            if topic_key == "employment_recruitment" and use_context == "predictive_maintenance":
+                return "risk_classification"
+            if topic_key == "high_risk_annex" and use_context == "predictive_maintenance":
+                return "risk_classification"
+            return topic_key
+
+    if use_context == "hr_screening":
+        return "employment_recruitment"
+    if use_context == "predictive_maintenance":
+        return "risk_classification"
+    return "risk_classification"
+
+
+def _detect_use_case_context(assessment: dict) -> str:
+    use_summary = (assessment.get("use_case_summary") or "").lower()
+    facts = assessment.get("extracted_facts") or {}
+    sector = (facts.get("sector") or {}).get("value", "").lower()
+    purpose = (facts.get("purpose") or {}).get("value", "").lower()
+    blob = f"{use_summary} {sector} {purpose}"
+
+    if any(k in blob for k in _USE_CASE_TOPICS["hr_screening"]):
+        return "hr_screening"
+    if any(k in blob for k in _USE_CASE_TOPICS["predictive_maintenance"]):
+        return "predictive_maintenance"
+    if any(k in blob for k in _USE_CASE_TOPICS["gpai_use"]):
+        return "gpai_use"
+    return "general"
+
+
 # ---------------------------------------------------------------------------
-# Relevance scoring
+# Scoring
 # ---------------------------------------------------------------------------
 
-def _score_relevance(
+def _compute_support_score(
     *,
     claim_type: str,
     claim_label: str,
+    claim_text: str,
     row: dict,
     resolved: dict,
     pa: dict,
     assessment: dict,
-) -> int:
-    excerpt = (resolved.get("excerpt") or "").lower()
-    if not excerpt:
-        return 25
+    sentence_fit: float,
+    excerpt: str,
+) -> tuple[float, str, dict[str, float]]:
+    source_ok, source_match_reason = _check_source_type_match(claim_type, resolved)
+
+    full_text = (
+        excerpt
+        + " "
+        + (row.get("full_text") or resolved.get("full_text") or resolved.get("text") or "")
+    ).strip()
+    claim_blob = f"{claim_label} {claim_text}"
+
+    keyword_score = _keyword_overlap_score(claim_blob, full_text)
+    entity_score = _entity_overlap_score(claim_blob, full_text)
+    source_score = 1.0 if source_ok else 0.0
+
+    claim_topic = _infer_claim_topic(claim_type, claim_label, assessment)
+    topic_score = _score_topic_match(claim_topic, resolved, assessment, excerpt)
+
+    components = {
+        "keyword": keyword_score,
+        "entity": entity_score,
+        "source_type": source_score,
+        "topic": topic_score,
+        "sentence_fit": sentence_fit,
+    }
+
+    if not source_ok:
+        return 0.25, source_match_reason, components
+
+    if not excerpt and sentence_fit < SENTENCE_FIT_MIN:
+        return 0.20, "No excerpt sentence overlaps enough with the claim.", components
+
+    weighted = (
+        0.25 * keyword_score
+        + 0.15 * entity_score
+        + 0.25 * source_score
+        + 0.20 * topic_score
+        + 0.15 * min(1.0, sentence_fit * 3.0)
+    )
 
     if claim_type == "uploaded_fact":
-        return _score_uploaded_fact(row.get("claim", ""), excerpt)
+        weighted = max(weighted, 0.35 * keyword_score + 0.40 * sentence_fit)
+    elif claim_type == "legal":
+        weighted = max(weighted, 0.30 * topic_score + 0.25 * keyword_score)
 
     if claim_type == "governance":
         obs = row.get("claim", "").lower()
-        overlap = sum(1 for w in _keywords(obs) if w in excerpt)
-        return min(95, 50 + overlap * 12)
+        overlap = sum(1 for w in _keywords(obs) if w in full_text.lower())
+        weighted = max(weighted, min(0.85, 0.40 + overlap * 0.08))
 
-    return _score_legal_citation(claim_label, excerpt, pa, assessment)
+    weighted = max(0.0, min(1.0, weighted))
 
+    if topic_score == 0.0 and claim_type == "legal":
+        weighted = min(weighted, 0.45)
+        source_match_reason = (
+            source_match_reason
+            + " Legal topic does not match the use-case context."
+        ).strip()
 
-def _score_uploaded_fact(claim: str, excerpt: str) -> int:
-    if ":" not in claim:
-        return 60
-    _, value = claim.split(":", 1)
-    value_words = _keywords(value)
-    if not value_words:
-        return 55
-    matches = sum(1 for w in value_words if w in excerpt)
-    ratio = matches / max(len(value_words), 1)
-    return min(98, int(45 + ratio * 55))
+    use_context = _detect_use_case_context(assessment)
+    chunk_topic = (resolved.get("topic") or "").lower()
+    if (
+        use_context == "predictive_maintenance"
+        and chunk_topic in ("employment_and_worker_management", "recruitment_screening")
+        and claim_type == "legal"
+    ):
+        weighted = min(weighted, 0.35)
 
+    if use_context == "predictive_maintenance" and "employment" in excerpt.lower() and claim_type == "legal":
+        weighted = min(weighted, 0.35)
 
-def _score_legal_citation(claim_label: str, excerpt: str, pa: dict, assessment: dict) -> int:
+    if use_context == "hr_screening" and claim_type == "legal" and "employment" in excerpt.lower():
+        weighted = max(weighted, 0.55)
+
     risk = pa.get("risk_tier", "")
-    label_lower = claim_label.lower()
-    score = 50
+    if risk in ("minimal_risk", "unclear") and claim_type == "legal":
+        if "shall always be considered high-risk" in full_text.lower():
+            weighted = min(weighted, 0.55)
 
-    # Label ↔ excerpt alignment
-    if "annex iii" in label_lower or "high-risk" in label_lower:
-        if "annex iii" in excerpt or "high-risk" in excerpt or "high risk" in excerpt:
-            score += 25
-        else:
-            score -= 15
+    gpai_fact = (assessment.get("extracted_facts") or {}).get("uses_gpai") or {}
+    gpai_value = (gpai_fact.get("value") or "").lower()
+    if claim_topic == "gpai" and not any(k in gpai_value for k in _USE_CASE_TOPICS["gpai_use"]):
+        if "lstm" in gpai_value or "custom" in gpai_value:
+            weighted = min(weighted, 0.35)
 
-    if "ai system definition" in label_lower:
-        if "ai system" in excerpt and ("infer" in excerpt or "learning" in excerpt or "model" in excerpt):
-            score += 30
-        else:
-            score -= 10
+    if not source_match_reason:
+        source_match_reason = "Source type matches claim requirements."
 
-    if "prohibited" in label_lower:
-        if "prohibited" in excerpt or "unacceptable" in excerpt:
-            score += 30
-        else:
-            score -= 10
+    return round(weighted, 4), source_match_reason, components
 
-    if "safety-component" in label_lower:
-        if "safety component" in excerpt:
-            score += 35
-        else:
-            score -= 5
 
-    # Use-case fit: industrial/maintenance vs employment/persons mismatch
-    use_summary = (assessment.get("use_case_summary") or "").lower()
-    facts = assessment.get("extracted_facts") or {}
-    sector = (facts.get("sector") or {}).get("value", "").lower()
-    context_blob = f"{use_summary} {sector}"
+def _check_source_type_match(claim_type: str, resolved: dict) -> tuple[bool, str]:
+    evidence_type = (resolved.get("evidence_type") or "").lower()
+    source_type = (resolved.get("source_type") or "").lower()
+    cid = (resolved.get("chunk_id") or "").lower()
 
-    industrial_signals = any(k in context_blob for k in ("maintenance", "machinery", "industrial", "sensor", "engine", "equipment"))
-    persons_signals = any(k in excerpt for k in ("natural persons", "profiling", "employment", "recruit", "candidate", "worker"))
+    is_uploaded = (
+        evidence_type in _UPLOADED_TYPES
+        or source_type in _UPLOADED_TYPES
+        or (cid and not cid.startswith("corpus"))
+    )
+    is_legal = (
+        evidence_type in _LEGAL_TYPES
+        or source_type in _LEGAL_TYPES
+        or cid.startswith("corpus")
+    )
 
-    if industrial_signals and persons_signals and "annex iii" in label_lower:
-        score -= 25  # excerpt about persons/employment weak for machinery case
+    if claim_type == "uploaded_fact":
+        if is_legal and not is_uploaded:
+            return False, "Corpus/regulatory citation cannot support an uploaded-system fact claim."
+        return True, "Uploaded or user-input source matches fact claim."
 
-    # Minimal/unclear risk + excerpt that asserts high-risk conditions
-    if risk in ("minimal_risk", "unclear"):
-        if "shall always be considered high-risk" in excerpt or "profiling of natural persons" in excerpt:
-            score -= 20  # relevant for comparison but weak as direct support for minimal risk
-        if "does not show" in (pa.get("reasoning") or "").lower() or "uncertain" in (pa.get("reasoning") or "").lower():
-            score += 10  # at least reasoning acknowledges uncertainty
+    if claim_type == "legal":
+        if is_uploaded and not is_legal:
+            return False, "Uploaded document alone cannot support a legal rule claim."
+        return True, "Regulatory or guidance source matches legal claim."
 
-    if risk == "high_risk_candidate" and "high-risk" in excerpt:
-        score += 20
+    if claim_type == "governance":
+        return True, "Governance citations may use uploaded or regulatory sources."
 
-    return max(10, min(98, score))
+    return True, "Source type acceptable."
+
+
+def _score_topic_match(
+    claim_topic: str,
+    resolved: dict,
+    assessment: dict,
+    excerpt: str,
+) -> float:
+    route = LEGAL_TOPIC_ROUTES.get(claim_topic)
+    if not route:
+        return 0.5
+
+    section = (resolved.get("section") or resolved.get("article") or "").lower()
+    topic = (resolved.get("topic") or "").lower()
+    law_layer = (resolved.get("law_layer") or "").lower()
+    text_blob = f"{excerpt} {resolved.get('full_text', '')}".lower()
+
+    score = 0.0
+    hits = 0
+    checks = 0
+
+    for sec in route.get("sections") or []:
+        checks += 1
+        if sec.lower() in section or sec.lower() in text_blob:
+            hits += 1
+
+    for t in route.get("topics") or []:
+        checks += 1
+        if t.lower() == topic or t.replace("_", " ") in text_blob:
+            hits += 1
+
+    for layer in route.get("law_layers") or []:
+        checks += 1
+        if layer.lower() == law_layer:
+            hits += 1
+
+    for kw in route.get("keywords") or ():
+        if kw in text_blob:
+            hits += 1
+            checks += 1
+            break
+
+    if checks == 0:
+        return 0.5
+    score = hits / checks
+
+    use_context = _detect_use_case_context(assessment)
+    chunk_topic = topic
+
+    if use_context == "predictive_maintenance" and chunk_topic in (
+        "employment_and_worker_management",
+        "recruitment_screening",
+    ):
+        return 0.0
+
+    if use_context == "hr_screening" and claim_topic == "employment_recruitment":
+        if chunk_topic in ("employment_and_worker_management", "recruitment_screening") or "employment" in text_blob:
+            return max(score, 0.85)
+
+    if claim_topic == "risk_classification" and use_context == "predictive_maintenance":
+        if chunk_topic in ("employment_and_worker_management", "recruitment_screening"):
+            return 0.0
+        if "employment" in text_blob or "recruit" in text_blob:
+            return 0.1
+
+    return min(1.0, score)
+
+
+def _keyword_overlap_score(claim: str, text: str) -> float:
+    claim_words = set(_keywords(claim))
+    if not claim_words:
+        return 0.3
+    text_lower = text.lower()
+    matches = sum(1 for w in claim_words if w in text_lower)
+    return matches / len(claim_words)
+
+
+def _entity_overlap_score(claim: str, text: str) -> float:
+    entities = set(_entities(claim))
+    if not entities:
+        return 0.3
+    text_lower = text.lower()
+    matches = sum(1 for e in entities if e in text_lower)
+    return matches / len(entities)
+
+
+def _sentence_overlap_score(
+    sentence: str,
+    claim_words: set[str],
+    claim_entities: set[str],
+) -> float:
+    lower = sentence.lower()
+    if not claim_words and not claim_entities:
+        return 0.0
+    word_hits = sum(1 for w in claim_words if w in lower)
+    entity_hits = sum(1 for e in claim_entities if e in lower)
+    word_ratio = word_hits / max(len(claim_words), 1)
+    entity_ratio = entity_hits / max(len(claim_entities), 1) if claim_entities else word_ratio
+    return 0.6 * word_ratio + 0.4 * entity_ratio
+
+
+def _label_from_score(score: float) -> str:
+    if score >= SUPPORT_STRONG:
+        return "strong"
+    if score >= SUPPORT_MODERATE:
+        return "moderate"
+    if score >= SUPPORT_WEAK:
+        return "weak"
+    return "unsupported"
+
+
+def _display_tier_from_label(support_label: str) -> str:
+    if support_label in ("strong", "moderate"):
+        return "primary"
+    if support_label == "weak":
+        return "additional"
+    return "unsupported"
+
+
+def _build_support_reason(
+    *,
+    support_label: str,
+    source_match_reason: str,
+    components: dict[str, float],
+) -> str:
+    parts = [f"Support tier: {support_label}."]
+    if source_match_reason:
+        parts.append(source_match_reason)
+    low = [k for k, v in components.items() if v < 0.35]
+    if low:
+        parts.append(f"Weak signals: {', '.join(low)}.")
+    return " ".join(parts)
+
+
+def _build_warning(support_label: str, source_match_reason: str) -> str | None:
+    if support_label in ("weak", "unsupported"):
+        return _WEAK_WARNING
+    if support_label == "moderate":
+        return None
+    if "cannot support" in (source_match_reason or "").lower():
+        return _WEAK_WARNING
+    return None
 
 
 def _keywords(text: str) -> list[str]:
     words = re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
-    stop = {"that", "this", "with", "from", "have", "been", "were", "their", "which", "about", "unclear"}
-    return [w for w in words if w not in stop][:12]
+    stop = {
+        "that", "this", "with", "from", "have", "been", "were", "their", "which",
+        "about", "unclear", "uploaded", "fact", "regulatory", "reference", "claim",
+    }
+    return [w for w in words if w not in stop][:16]
+
+
+def _entities(text: str) -> list[str]:
+    lower = (text or "").lower()
+    found: list[str] = []
+    patterns = (
+        r"article\s+\d+(?:\(\d+\))?",
+        r"annex\s+[ivxlc]+(?:\(\d+\))?",
+        r"\blstm\b",
+        r"\bgpai\b",
+        r"\bllm\b",
+        r"predictive\s+maintenance",
+        r"safety\s+component",
+        r"high-risk",
+        r"recruit(?:ment)?",
+        r"employment",
+    )
+    for pat in patterns:
+        for m in re.finditer(pat, lower):
+            found.append(m.group(0).strip())
+    found.extend(_keywords(lower)[:6])
+    return list(dict.fromkeys(found))[:12]
 
 
 # ---------------------------------------------------------------------------
@@ -270,76 +802,70 @@ def _build_relevance_explanation(
     resolved: dict,
     pa: dict,
     assessment: dict,
-    score: int,
+    support_label: str,
+    support_reason: str,
 ) -> str:
-    excerpt = (resolved.get("excerpt") or "").strip()
     risk = pa.get("risk_tier", "")
     use_summary = (assessment.get("use_case_summary") or "").strip()
+    context_snippet = use_summary[:120] + ("…" if len(use_summary) > 120 else "") if use_summary else "this use case"
+
+    if support_label in ("weak", "unsupported"):
+        return (
+            f"{support_reason} "
+            "This source is related but does not directly prove the claim."
+        )
 
     if claim_type == "uploaded_fact":
         if ":" in row.get("claim", ""):
             _, value = row["claim"].split(":", 1)
             return (
-                f"The uploaded document supports the fact “{value.strip()}”. "
-                f"The cited excerpt describes this directly from the user-provided material."
+                f"The uploaded document supports the fact “{value.strip()}” "
+                f"({support_label} support). "
+                f"The cited excerpt describes this from user-provided material."
             )
-        return "This excerpt comes from an uploaded document cited as factual evidence for the assessment."
+        return (
+            f"This excerpt comes from an uploaded document cited as factual evidence "
+            f"({support_label} support)."
+        )
 
     if claim_type == "governance":
         return (
-            "This source was cited in support of a governance observation. "
-            "Review whether the excerpt matches the specific compliance area discussed."
+            f"This source was cited for a governance observation ({support_label} support). "
+            "Review whether the excerpt matches the specific compliance area."
         )
 
-    # Legal / regulatory
     label_lower = claim_label.lower()
-    context_snippet = use_summary[:120] + ("…" if len(use_summary) > 120 else "") if use_summary else "this use case"
 
     if "ai system definition" in label_lower:
         return (
-            f"This excerpt sets out criteria for what counts as an AI system under the EU AI Act. "
+            f"This excerpt sets out AI system criteria under the EU AI Act ({support_label} support). "
             f"The assessment compared those criteria to {context_snippet}."
         )
 
     if "prohibited" in label_lower:
         return (
-            "This regulatory excerpt describes prohibited AI practices. "
-            "The assessment checked whether the uploaded use case falls within any prohibition."
+            f"This regulatory excerpt describes prohibited AI practices ({support_label} support). "
+            "The assessment checked whether the use case falls within any prohibition."
         )
 
     if "annex iii" in label_lower or "high-risk" in label_lower:
-        if score < PRIMARY_RELEVANCE_THRESHOLD:
+        if support_label == "moderate" or risk in ("minimal_risk", "unclear"):
             return (
-                "This excerpt describes high-risk conditions or Annex III categories in the AI Act. "
-                "It is relevant background law, but it does not by itself prove this system is high-risk — "
-                f"the assessment still had to infer how it applies to {context_snippet}."
-            )
-        if risk in ("minimal_risk", "unclear"):
-            return (
-                "This Annex III / high-risk excerpt was used for comparison. "
-                "The uploaded documents do not clearly show the system meets those high-risk triggers "
-                f"(e.g. direct impact on natural persons or safety-component integration), so the assessment "
-                f"concluded {risk.replace('_', ' ')} rather than confirmed high-risk."
+                f"This Annex III / high-risk excerpt provides comparison context ({support_label} support). "
+                f"It does not by itself prove high-risk for {context_snippet}."
             )
         return (
-            "This excerpt lists or defines high-risk conditions. "
-            "The assessment linked it to uploaded facts suggesting the system may fall within Annex III."
+            f"This excerpt lists high-risk conditions ({support_label} support). "
+            "The assessment linked it to uploaded facts suggesting Annex III relevance."
         )
 
-    if "safety-component" in label_lower:
+    if support_label == "moderate":
         return (
-            "This excerpt concerns safety components of products. "
-            "The assessment checked whether the AI model is integrated as such a component — "
-            "a key uncertainty for industrial predictive-maintenance cases."
-        )
-
-    if score < PRIMARY_RELEVANCE_THRESHOLD:
-        return (
-            "This regulatory excerpt was retrieved during assessment but has weak direct alignment "
-            f"with the specific claim. Treat it as background context, not proof of the conclusion."
+            f"This regulatory excerpt provides partial context ({support_label} support). "
+            "The final risk tier is still a system inference."
         )
 
     return (
-        "This regulatory excerpt provides legal context used during classification. "
+        f"This regulatory excerpt provides legal context ({support_label} support). "
         "The final risk tier is still a system inference — see ‘System inference’ above."
     )

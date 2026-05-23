@@ -17,9 +17,12 @@ you run the whole pipeline end-to-end without spending an API credit.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from src.llm import call_llm
+from src.config import MOCK_LLM
+from src.citation_validation import validate_and_repair_assessment
 from src.retrieval import (
     retrieve_combined_context,
     retrieve_uploaded_context,
@@ -45,6 +48,11 @@ CRITICAL RULES
 3. Never present a regulatory claim without a corpus citation.
 4. Avoid sounding like final legal advice. Use qualified language: "appears to", "likely", "may fall within".
 5. Lower confidence to "low" when key facts (purpose, oversight, decision impact, deployment context, GPAI use) are missing.
+6. Cite ONLY chunks that DIRECTLY support the specific claim. Do not cite a chunk because it appeared nearby in retrieval.
+7. NEVER use corpus chunks to prove uploaded-system facts (purpose, sector, automation). NEVER use uploaded docs to prove legal rules.
+8. If no direct citation exists, leave the evidence array empty, lower confidence, and add missing_information — do NOT invent support.
+9. For minimal_risk: cite legal chunks that explain why Annex III categories do NOT apply; do not cite unrelated high-risk category lists as proof.
+10. For GPAI: cite only if documents mention foundation models, third-party LLMs, or GPAI — custom ML/LSTM alone is not GPAI.
 
 YOUR AUTONOMOUS DECISIONS
 - Which uploaded facts are relevant to an AI Act analysis (ignore boilerplate).
@@ -153,6 +161,14 @@ def assessment_agent(
         last_response = _safe_json_loads(raw["content"])
         iterations += 1
 
+        last_response = validate_and_repair_assessment(
+            last_response,
+            uploaded_chunks=uploaded_chunks,
+            corpus_chunks=corpus_chunks,
+            extra_chunks=extra_chunks,
+            strict_pack=not MOCK_LLM,
+        )
+
         needs_more = last_response.get("needs_more_evidence") or []
         if not needs_more or iterations >= MAX_REACT_ITERATIONS:
             break
@@ -216,7 +232,8 @@ def _build_user_message(
         parts.append(
             "## Instructions\n"
             "Produce the JSON assessment described in the system prompt. "
-            "Cite chunk_ids exactly as they appear above. "
+            "Cite chunk_ids exactly as they appear above — only when they DIRECTLY support the claim. "
+            "Do not use corpus chunks for uploaded facts or uploaded chunks for legal rules. "
             "If anything important is missing, list it under missing_information "
             "and (optionally) request up to 3 more targeted retrievals via "
             "needs_more_evidence."
@@ -291,12 +308,16 @@ def _pick_mock_fixture(
     blob = " ".join(c.get("text", "") for c in uploaded_chunks).lower()
 
     def has(*words: str) -> bool:
-        return any(w in blob for w in words)
+        return any(re.search(rf"\b{re.escape(w)}\b", blob) for w in words)
 
     if has("emotion", "mood", "affect") and has("workplace", "employee", "worker"):
         base = _MOCK_EMOTION
     elif has("spam") and has("filter"):
         base = _MOCK_SPAM
+    elif has("maintenance", "predictive", "lstm", "machineguard") and has(
+        "industrial", "factory", "machinery", "sensor", "equipment"
+    ):
+        base = _MOCK_MAINTENANCE
     elif has("recruit", "candidate", "hiring", "screening", "talentrank") or (
         has("applicant") and has("recruit", "hiring", "shortlist", "cv", "talentrank")
     ):
@@ -469,6 +490,42 @@ _MOCK_GPAI = _fixture({
         {"topic": "Downstream use of reports", "why_it_matters": "May trigger high-risk obligations.",       "suggested_question": "Are the reports used to inform HR, credit, or other high-risk decisions?"}
     ],
     "needs_more_evidence": []
+})
+
+_MOCK_MAINTENANCE = _fixture({
+    "use_case_summary": (
+        "Industrial predictive maintenance system using a custom LSTM on vibration and "
+        "temperature sensor data to forecast machinery failures. Technicians review alerts manually."
+    ),
+    "extracted_facts": {
+        "purpose":          {"value": "Predict machinery failures from sensor data", "confidence": "high",   "evidence": ["uploaded:chunk0"]},
+        "affected_persons": {"value": "Maintenance technicians",                     "confidence": "high",   "evidence": ["uploaded:chunk0"]},
+        "sector":           {"value": "Industrial manufacturing",                    "confidence": "high",   "evidence": ["uploaded:chunk0"]},
+        "automation_level": {"value": "Alerts only; technicians schedule maintenance", "confidence": "medium", "evidence": ["uploaded:chunk1"]},
+        "human_oversight":  {"value": "Technicians review every alert",              "confidence": "medium", "evidence": ["uploaded:chunk1"]},
+        "uses_gpai":        {"value": "Custom LSTM — not a foundation model or GPAI", "confidence": "high",  "evidence": ["uploaded:chunk1"]},
+    },
+    "preliminary_assessment": {
+        "ai_system": "yes",
+        "ai_system_reasoning": "Uses an LSTM model to infer failure probability from sensor data (Article 3).",
+        "risk_tier": "minimal_risk",
+        "confidence": "medium",
+        "reasoning": (
+            "The system monitors industrial machinery and does not profile natural persons or "
+            "perform recruitment. Annex III employment categories do not appear to apply. "
+            "Safety-component integration under Article 6(1) is unclear from the documents."
+        ),
+        "legal_citations": ["corpus:article_3", "corpus:article_6"],
+    },
+    "governance_observations": [
+        {"area": "documentation", "observation": "Document model training data and alert thresholds.", "citations": ["uploaded:chunk1"]},
+    ],
+    "missing_information": [
+        {"topic": "Safety component integration", "why_it_matters": "Article 6(1) may apply if embedded as a safety component.", "suggested_question": "Is the AI integrated as a safety component of a regulated product?"},
+        {"topic": "Deployment context", "why_it_matters": "Sector and geography affect obligations.", "suggested_question": "Where and at what scale is the system deployed?"},
+        {"topic": "Safety component status", "why_it_matters": "Determines Article 6 high-risk path.", "suggested_question": "Could the model be considered a safety component under Article 6?"},
+    ],
+    "needs_more_evidence": [],
 })
 
 _MOCK_GENERIC = _fixture({

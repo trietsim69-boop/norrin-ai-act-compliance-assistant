@@ -12,16 +12,17 @@ Upload documents (or describe a use case manually) → retrieve official legal c
 
 - Multi-document intake + optional manual description  
 - Fact extraction and risk-tier classification (AI system definition, Annex III, Art. 5, Art. 50, GPAI signals)  
-- Governance observations, missing-info gaps, and citation-backed evidence cards  
-- **Assessment → Critic → (one revision) → Presenter** pipeline with visible agent trace  
+- Governance observations, missing-info gaps, and **support-labelled** citation cards (strong / moderate / weak / unsupported)  
+- **Assessment → validate → Critic → (one revision) → Presenter** pipeline with visible agent trace  
 
 ---
 
 ## Architecture (quick view)
 
 ```text
-User input → MarkItDown → chunking → Chroma → retrieval
-    → Assessment Agent → Critic Agent → [revision] → Citation resolver → Presenter → Streamlit dashboard
+User input → MarkItDown → chunking → Chroma → retrieval (scoped corpus)
+    → Assessment Agent → validate citations → Critic → [revision]
+    → Citation resolver → relevance scoring → Presenter → Streamlit dashboard
 ```
 
 Details: [`docs/architecture.md`](docs/architecture.md) · Multi-agent design: [`docs/multi_agent_pipeline.md`](docs/multi_agent_pipeline.md)
@@ -45,7 +46,7 @@ Full setup (env vars, mock mode, ports): [`docs/setup_and_run.md`](docs/setup_an
 
 ## Demo cases
 
-Five sample use-case folders in [`demo_cases/`](demo_cases/) — HR screening, chatbot, workplace emotion detection, spam filter, LLM/GPAI tool.
+Six sample use-case folders in [`demo_cases/`](demo_cases/) — HR screening, chatbot, workplace emotion detection, spam filter, LLM/GPAI tool, **predictive maintenance**.
 
 Judge demo script: [`docs/demo_guide.md`](docs/demo_guide.md)  
 Automated checks: [`docs/evaluation_and_trigger_tests.md`](docs/evaluation_and_trigger_tests.md)
@@ -70,9 +71,9 @@ Automated checks: [`docs/evaluation_and_trigger_tests.md`](docs/evaluation_and_t
 
 ## Current status
 
-**Done:** preprocessing, corpus loading, RAG retrieval, three agents + citation layer, Streamlit console, demo cases, trigger tests (5/5 mock with corpus loaded).
+**Done:** preprocessing, corpus loading, scoped RAG retrieval, citation validation + relevance layer, three agents + presenter, Streamlit console, six demo cases, trigger tests (6/6 mock with corpus loaded), citation unit tests (13/13).
 
-**Remaining:** richer citation passage display, export formats, real-LLM regression, deployment packaging.
+**Remaining:** real-LLM regression log, export formats, deployment packaging.
 
 Live tracker: [`docs/codebase_status.md`](docs/codebase_status.md)
 
@@ -80,7 +81,7 @@ Live tracker: [`docs/codebase_status.md`](docs/codebase_status.md)
 
 ## Safety
 
-Preliminary assessment only. EU AI Act interpretation is evolving. Citations depend on retrieval quality. Human expert review required before any compliance or deployment decision. Not production-ready.
+Preliminary assessment only. EU AI Act interpretation is evolving. Citations depend on retrieval quality and programmatic validation — weak sources are downgraded, not shown as strong proof. Human expert review required before any compliance or deployment decision. Not production-ready.
 
 ---
 

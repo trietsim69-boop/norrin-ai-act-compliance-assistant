@@ -35,26 +35,19 @@ Technical overview of the Norrin AI Act Compliance Assistant. For agent-specific
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Retrieval (src/retrieval.py)                                   │
-│  8 standard queries + metadata-targeted corpus pulls            │
+│  Standard queries (uploaded: all; corpus: scoped) + targeted   │
 │  → uploaded_chunks[] + corpus_chunks[]                          │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  LLM wrapper (src/llm.py) — DeepSeek / OpenAI / Anthropic       │
-│  MOCK_LLM=true → fixtures (assessment + critic)                   │
+│  Assessment Agent + validate_and_repair_assessment()            │
+│  Critic Agent (cited chunk text)  [optional revision]             │
 └────────────────────────────┬────────────────────────────────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         ▼                   ▼                   ▼
-   Assessment Agent    Critic Agent      [optional revision]
-         │                   │                   │
-         └───────────────────┴───────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Citation resolver (src/citation_resolver.py)                   │
-│  chunk_id → readable cards; relevance tiering (citation_relevance)│
+│  Citation resolver + relevance (support tiers, topic routing)   │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
@@ -106,8 +99,17 @@ Embeddings: SentenceTransformers `all-MiniLM-L6-v2` (default) or OpenAI `text-em
 
 - **`retrieve_combined_context`** — entry point for pipeline  
 - **`STANDARD_QUERIES`** — purpose, affected persons, sector, oversight, GPAI, employment, transparency, emotion recognition, …  
-- **`infer_retrieval_targets`** — metadata-driven extra corpus pulls (e.g. Annex III employment)  
+- **`select_corpus_queries`** — core queries always; domain queries (employment, chatbot, emotion, GPAI) only when uploaded text matches  
+- **`infer_retrieval_targets`** — metadata-driven extra corpus pulls (e.g. Annex III employment when HR signals present)  
 - Agents receive **only returned chunks** — retrieval is the security/relevance boundary  
+
+### Citation layer
+
+- **`citation_validation.py`** — post-LLM repair (pack membership, source-type, topic, support threshold)  
+- **`citation_resolver.py`** — ID → card  
+- **`citation_relevance.py`** — support_score 0–1, strong/moderate/weak/unsupported tiers, claim-aware excerpts  
+
+See [`citation_and_evidence.md`](citation_and_evidence.md).
 
 ### LLM wrapper
 
@@ -117,13 +119,6 @@ Embeddings: SentenceTransformers `all-MiniLM-L6-v2` (default) or OpenAI `text-em
 ### Agents
 
 See [`multi_agent_pipeline.md`](multi_agent_pipeline.md) and [`../AGENTS.md`](../AGENTS.md).
-
-### Citation layer
-
-- **`citation_resolver.py`** — ID → card  
-- **`citation_relevance.py`** — score, primary/additional tier, system-inference block  
-
-See [`citation_and_evidence.md`](citation_and_evidence.md).
 
 ### Session state & data directories
 
