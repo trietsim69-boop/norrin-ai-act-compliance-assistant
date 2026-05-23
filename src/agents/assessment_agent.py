@@ -99,14 +99,24 @@ def assessment_agent(
     session_metadata: dict | None = None,
     queries: list[str] | None = None,
     top_k_per_query: int = 4,
+    *,
+    previous_assessment: dict | None = None,
+    revision_instruction: str | None = None,
 ) -> dict:
     """
     Run the assessment pipeline for a session. Returns the final structured assessment.
 
     The returned dict has the shape declared in ASSESSMENT_SYSTEM_PROMPT plus a
     "_meta" key with debug info (iterations, total evidence chunks used).
+
+    Revision mode:
+        If `previous_assessment` and `revision_instruction` are provided, the agent
+        receives them as additional context and the LLM is asked to revise the
+        previous output according to the critic's instruction. Also returns the
+        revised result in the same shape.
     """
     session_metadata = session_metadata or {}
+    is_revision = previous_assessment is not None and revision_instruction is not None
 
     baseline = retrieve_combined_context(
         queries or STANDARD_QUERIES,
@@ -125,6 +135,8 @@ def assessment_agent(
             uploaded_chunks=uploaded_chunks,
             corpus_chunks=corpus_chunks,
             extra_chunks=extra_chunks,
+            previous_assessment=previous_assessment if is_revision else None,
+            revision_instruction=revision_instruction if is_revision else None,
         )
 
         raw = call_llm(
@@ -135,7 +147,7 @@ def assessment_agent(
             response_format="json",
             temperature=0.2,
             max_tokens=3500,
-            mock=_pick_mock_fixture(uploaded_chunks),
+            mock=_pick_mock_fixture(uploaded_chunks, revision_instruction=revision_instruction),
         )
 
         last_response = _safe_json_loads(raw["content"])
@@ -155,6 +167,7 @@ def assessment_agent(
         "uploaded_chunks_used": len(uploaded_chunks),
         "corpus_chunks_used": len(corpus_chunks),
         "extra_chunks_used": len(extra_chunks),
+        "was_revision": is_revision,
     }
     return last_response
 
@@ -169,6 +182,8 @@ def _build_user_message(
     uploaded_chunks: list[dict],
     corpus_chunks: list[dict],
     extra_chunks: list[dict],
+    previous_assessment: dict | None = None,
+    revision_instruction: str | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -186,14 +201,26 @@ def _build_user_message(
         parts.append("## Additional evidence retrieved on request")
         parts.append(_format_chunks(extra_chunks))
 
-    parts.append(
-        "## Instructions\n"
-        "Produce the JSON assessment described in the system prompt. "
-        "Cite chunk_ids exactly as they appear above. "
-        "If anything important is missing, list it under missing_information "
-        "and (optionally) request up to 3 more targeted retrievals via "
-        "needs_more_evidence."
-    )
+    if previous_assessment and revision_instruction:
+        parts.append("## Previous assessment")
+        parts.append(json.dumps(previous_assessment, indent=2, ensure_ascii=False))
+        parts.append("## Critic revision instruction")
+        parts.append(revision_instruction)
+        parts.append(
+            "## Instructions\n"
+            "Revise the previous assessment to address the critic's instruction. "
+            "Re-emit the FULL JSON object in the same shape. Keep what is correct, "
+            "fix what the critic flagged, and lower confidence levels if appropriate."
+        )
+    else:
+        parts.append(
+            "## Instructions\n"
+            "Produce the JSON assessment described in the system prompt. "
+            "Cite chunk_ids exactly as they appear above. "
+            "If anything important is missing, list it under missing_information "
+            "and (optionally) request up to 3 more targeted retrievals via "
+            "needs_more_evidence."
+        )
     return "\n\n".join(parts)
 
 
@@ -247,24 +274,43 @@ def _safe_json_loads(text: str) -> dict:
 # Mock fixtures — used when MOCK_LLM=true
 # ---------------------------------------------------------------------------
 
-def _pick_mock_fixture(uploaded_chunks: list[dict]) -> dict:
-    """Detect which demo case the uploaded chunks resemble and return its fixture."""
+def _pick_mock_fixture(
+    uploaded_chunks: list[dict],
+    *,
+    revision_instruction: str | None = None,
+) -> dict:
+    """Detect which demo case the uploaded chunks resemble and return its fixture.
+    When a revision instruction is present, return a lightly-revised version
+    of the fixture (lower confidence + a note acknowledging the critic)."""
     blob = " ".join(c.get("text", "") for c in uploaded_chunks).lower()
 
     def has(*words: str) -> bool:
         return any(w in blob for w in words)
 
     if has("emotion", "mood", "affect") and has("workplace", "employee", "worker"):
-        return _MOCK_EMOTION
-    if has("recruit", "candidate", "hiring", "applicant", "screening", "talentrank"):
-        return _MOCK_HR
-    if has("spam", "filter") and not has("recruit"):
-        return _MOCK_SPAM
-    if has("chatbot", "conversational", "virtual assistant", "customer support"):
-        return _MOCK_CHATBOT
-    if has("gpt", "llm", "large language model", "claude", "report generator"):
-        return _MOCK_GPAI
-    return _MOCK_GENERIC
+        base = _MOCK_EMOTION
+    elif has("recruit", "candidate", "hiring", "applicant", "screening", "talentrank"):
+        base = _MOCK_HR
+    elif has("spam", "filter") and not has("recruit"):
+        base = _MOCK_SPAM
+    elif has("chatbot", "conversational", "virtual assistant", "customer support"):
+        base = _MOCK_CHATBOT
+    elif has("gpt", "llm", "large language model", "claude", "report generator"):
+        base = _MOCK_GPAI
+    else:
+        base = _MOCK_GENERIC
+
+    if revision_instruction is None:
+        return base
+
+    revised = json.loads(base["content"])
+    if "preliminary_assessment" in revised:
+        revised["preliminary_assessment"]["confidence"] = "low"
+        revised["preliminary_assessment"]["reasoning"] = (
+            "[Revised after critic review] " + revised["preliminary_assessment"].get("reasoning", "")
+        )
+    revised["needs_more_evidence"] = []
+    return {"content": json.dumps(revised, ensure_ascii=False), "tool_calls": None}
 
 
 def _fixture(d: dict) -> dict:
