@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.citation_relevance import enrich_citation_row, build_system_inference
+
 DISCLAIMER = (
     "This is a preliminary, AI-generated assessment for structured review. "
     "It is NOT legal advice and does not replace qualified legal counsel. "
@@ -69,32 +71,27 @@ FACT_LABELS = {
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def presenter_agent(pipeline_result: dict) -> dict:
+def presenter_agent(pipeline_result: dict, chunk_lookup: dict | None = None) -> dict:
     """
     Format a pipeline result into display-ready dashboard data.
 
     Args:
-        pipeline_result: the dict returned by run_assessment_pipeline (must contain
-            'assessment' and 'critic' keys; '_meta' and 'history' are optional).
-
-    Returns:
-        A dict with:
-            - sections: dict of 6 dashboard sections
-            - warnings: list of {severity, message}
-            - disclaimer: legal disclaimer string
-            - _meta: forwarded + augmented metadata
+        pipeline_result: dict from run_assessment_pipeline (assessment + critic).
+        chunk_lookup: optional map chunk_id -> resolved citation card from
+            src.citation_resolver.resolve_citations.
     """
     assessment = pipeline_result.get("assessment") or {}
     critic = pipeline_result.get("critic") or {}
     meta_in = pipeline_result.get("_meta", {})
+    lookup = chunk_lookup or {}
 
     sections = {
         "use_case_summary":        _section_summary(assessment),
-        "extracted_facts":         _section_facts(assessment),
-        "preliminary_assessment":  _section_assessment(assessment),
-        "governance_observations": _section_governance(assessment),
+        "extracted_facts":         _section_facts(assessment, lookup),
+        "preliminary_assessment":  _section_assessment(assessment, lookup),
+        "governance_observations": _section_governance(assessment, lookup),
         "missing_information":     _section_missing(assessment, critic),
-        "citations":               _section_citations(assessment),
+        "citations":               _section_citations(assessment, lookup),
     }
 
     warnings = _build_warnings(assessment, critic)
@@ -123,38 +120,32 @@ def _section_summary(a: dict) -> dict:
     }
 
 
-def _section_facts(a: dict) -> dict:
+def _section_facts(a: dict, lookup: dict) -> dict:
     raw = a.get("extracted_facts") or {}
     facts = []
-    for key, label in FACT_LABELS.items():
-        fact = raw.get(key) or {}
-        confidence = fact.get("confidence", "low")
-        facts.append({
-            "key":              key,
-            "label":            label,
-            "value":            (fact.get("value") or "Unclear").strip(),
-            "confidence":       confidence,
-            "confidence_color": CONFIDENCE_COLORS.get(confidence, "grey"),
-            "evidence":         list(fact.get("evidence") or []),
-        })
 
-    extra_keys = [k for k in raw.keys() if k not in FACT_LABELS]
-    for key in extra_keys:
-        fact = raw.get(key) or {}
+    def _build(key: str, label: str, fact: dict) -> dict:
         confidence = fact.get("confidence", "low")
-        facts.append({
-            "key":              key,
-            "label":            key.replace("_", " ").title(),
-            "value":            (fact.get("value") or "Unclear").strip(),
-            "confidence":       confidence,
+        evidence_ids = list(fact.get("evidence") or [])
+        return {
+            "key": key,
+            "label": label,
+            "value": (fact.get("value") or "Unclear").strip(),
+            "confidence": confidence,
             "confidence_color": CONFIDENCE_COLORS.get(confidence, "grey"),
-            "evidence":         list(fact.get("evidence") or []),
-        })
+            "evidence": evidence_ids,
+            "evidence_resolved": [_card_for(cid, lookup) for cid in evidence_ids],
+        }
+
+    for key, label in FACT_LABELS.items():
+        facts.append(_build(key, label, raw.get(key) or {}))
+    for key in [k for k in raw.keys() if k not in FACT_LABELS]:
+        facts.append(_build(key, key.replace("_", " ").title(), raw.get(key) or {}))
 
     return {"title": "Extracted facts", "facts": facts}
 
 
-def _section_assessment(a: dict) -> dict:
+def _section_assessment(a: dict, lookup: dict) -> dict:
     pa = a.get("preliminary_assessment") or {}
     ai_value = pa.get("ai_system", "unclear")
     risk_value = pa.get("risk_tier", "unclear")
@@ -162,6 +153,7 @@ def _section_assessment(a: dict) -> dict:
 
     ai_label, ai_color = AI_SYSTEM_LABELS.get(ai_value, (ai_value, "grey"))
     risk_label, risk_color = RISK_TIER_LABELS.get(risk_value, (risk_value, "grey"))
+    legal_ids = list(pa.get("legal_citations") or [])
 
     return {
         "title": "Preliminary EU AI Act assessment",
@@ -181,19 +173,22 @@ def _section_assessment(a: dict) -> dict:
             "color": CONFIDENCE_COLORS.get(confidence, "grey"),
         },
         "reasoning": (pa.get("reasoning") or "").strip(),
-        "legal_citations": list(pa.get("legal_citations") or []),
+        "legal_citations": legal_ids,
+        "legal_citations_resolved": [_card_for(cid, lookup) for cid in legal_ids],
     }
 
 
-def _section_governance(a: dict) -> dict:
+def _section_governance(a: dict, lookup: dict) -> dict:
     items = []
     for obs in a.get("governance_observations") or []:
         area = obs.get("area", "")
+        cite_ids = list(obs.get("citations") or [])
         items.append({
-            "area":         area,
-            "area_label":   GOVERNANCE_AREA_LABELS.get(area, area.replace("_", " ").title() or "General"),
-            "observation":  (obs.get("observation") or "").strip(),
-            "citations":    list(obs.get("citations") or []),
+            "area": area,
+            "area_label": GOVERNANCE_AREA_LABELS.get(area, area.replace("_", " ").title() or "General"),
+            "observation": (obs.get("observation") or "").strip(),
+            "citations": cite_ids,
+            "citations_resolved": [_card_for(cid, lookup) for cid in cite_ids],
         })
     return {"title": "Governance observations", "items": items}
 
@@ -227,28 +222,95 @@ def _section_missing(a: dict, critic: dict) -> dict:
     }
 
 
-def _section_citations(a: dict) -> dict:
-    uploaded_ids: set[str] = set()
-    corpus_ids: set[str] = set()
+def _section_citations(a: dict, lookup: dict) -> dict:
+    raw_rows: list[dict] = []
 
     pa = a.get("preliminary_assessment") or {}
     for cid in pa.get("legal_citations") or []:
-        _bucket(cid, uploaded_ids, corpus_ids)
+        raw_rows.append(_claim_row(
+            claim="Regulatory reference",
+            resolved=_card_for(cid, lookup),
+            claim_type="legal",
+        ))
 
-    for fact in (a.get("extracted_facts") or {}).values():
-        if isinstance(fact, dict):
-            for cid in fact.get("evidence") or []:
-                _bucket(cid, uploaded_ids, corpus_ids)
+    for key, fact in (a.get("extracted_facts") or {}).items():
+        if not isinstance(fact, dict):
+            continue
+        label = FACT_LABELS.get(key, key.replace("_", " ").title())
+        value = (fact.get("value") or "Unclear").strip()
+        for cid in fact.get("evidence") or []:
+            raw_rows.append(_claim_row(
+                claim=f"{label}: {value}",
+                resolved=_card_for(cid, lookup),
+                claim_type="uploaded_fact",
+            ))
 
     for obs in a.get("governance_observations") or []:
+        area = obs.get("area", "")
+        area_label = GOVERNANCE_AREA_LABELS.get(area, area.replace("_", " ").title() or "Governance")
+        observation = (obs.get("observation") or "").strip()
+        claim = f"{area_label}: {observation[:120]}{'…' if len(observation) > 120 else ''}"
         for cid in obs.get("citations") or []:
-            _bucket(cid, uploaded_ids, corpus_ids)
+            raw_rows.append(_claim_row(
+                claim=claim,
+                resolved=_card_for(cid, lookup),
+                claim_type="governance",
+            ))
+
+    rows: list[dict] = []
+    for r in raw_rows:
+        claim_type = r.pop("_claim_type")
+        rows.append(enrich_citation_row(r, claim_type=claim_type, assessment=a))
+    primary = [r for r in rows if r.get("display_tier") == "primary"]
+    additional = [r for r in rows if r.get("display_tier") != "primary"]
+
+    uploaded_seen: dict[str, dict] = {}
+    corpus_seen: dict[str, dict] = {}
+    for row in rows:
+        resolved = row.get("_resolved") or {}
+        cid = resolved.get("chunk_id", row.get("chunk_id", ""))
+        if _is_corpus_citation(resolved):
+            corpus_seen.setdefault(cid, resolved)
+        else:
+            uploaded_seen.setdefault(cid, resolved)
 
     return {
         "title": "Citations and evidence separation",
-        "uploaded_evidence": [{"chunk_id": c} for c in sorted(uploaded_ids)],
-        "corpus_citations":  [{"chunk_id": c} for c in sorted(corpus_ids)],
+        "system_inference": build_system_inference(a),
+        "claims_table": primary,
+        "citation_cards": primary,
+        "additional_evidence": additional,
+        "uploaded_evidence": list(uploaded_seen.values()),
+        "corpus_citations": list(corpus_seen.values()),
     }
+
+
+def _claim_row(*, claim: str, resolved: dict, claim_type: str) -> dict:
+    return {
+        "claim": claim,
+        "source": resolved.get("source", resolved.get("source_label", "")),
+        "evidence_type": resolved.get("evidence_type", "Unknown"),
+        "excerpt": resolved.get("excerpt", ""),
+        "chunk_id": resolved.get("chunk_id", ""),
+        "found": resolved.get("found", False),
+        "_resolved": resolved,
+        "_claim_type": claim_type,
+    }
+
+
+def _card_for(chunk_id: str, lookup: dict) -> dict:
+    if chunk_id in lookup:
+        return lookup[chunk_id]
+    from src.citation_resolver import resolve_citation
+    return resolve_citation(chunk_id)
+
+
+def _is_corpus_citation(resolved: dict) -> bool:
+    st = resolved.get("source_type", "")
+    if st in ("regulation", "official_guidance"):
+        return True
+    cid = (resolved.get("chunk_id") or "").lower()
+    return cid.startswith("corpus") or "article" in cid or "annex" in cid
 
 
 # ---------------------------------------------------------------------------
@@ -297,16 +359,3 @@ def _build_warnings(a: dict, critic: dict) -> list[dict]:
     return warnings
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _bucket(chunk_id: str, uploaded: set[str], corpus: set[str]) -> None:
-    if not chunk_id:
-        return
-    cid = chunk_id.strip()
-    lower = cid.lower()
-    if lower.startswith("corpus") or "annex" in lower or "article" in lower:
-        corpus.add(cid)
-    else:
-        uploaded.add(cid)

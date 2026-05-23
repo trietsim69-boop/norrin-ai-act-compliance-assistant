@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23 (Streamlit dashboard + follow-up loop added)
+**Last updated:** 2026-05-23 (human-readable citation resolver + citation cards UI)
 
 ---
 
@@ -45,6 +45,8 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | `chunking.py` | Paragraph/sentence-aware chunker with metadata + overlap | `chunk_text`, `chunk_document` |
 | `vector_store.py` | Chroma client + collections (`uploaded_docs_collection`, `ai_act_corpus_collection`) + corpus loader | `add_chunks_to_uploaded`, `load_corpus_to_chroma`, `get_uploaded_collection`, `get_corpus_collection`, `delete_session_chunks` |
 | `retrieval.py` | RAG layer: 8 standard queries, dedup, distance-sorted results | `retrieve_uploaded_context`, `retrieve_ai_act_context`, `retrieve_combined_context`, `STANDARD_QUERIES` |
+| `citation_resolver.py` | Resolve chunk_id → human-readable citation cards (Chroma lookup + evidence cache + chunk-ID heuristic) | `resolve_citations`, `resolve_citation`, `format_source_label` |
+| `citation_relevance.py` | Score claim↔excerpt alignment, precise claim labels, relevance explanations, primary vs additional filter | `enrich_citation_row`, `build_system_inference` |
 | `llm.py` | LLM provider abstraction (DeepSeek / OpenAI / Anthropic) + mock-mode switch | `call_llm`, `is_mock_mode` |
 | `pipeline.py` | Multi-agent orchestrator: Assessment → Critic → (revise once if fail) | `run_assessment_pipeline` |
 
@@ -54,7 +56,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 |---|---|---|
 | `assessment_agent.py` | Produce a structured first-pass EU AI Act assessment from retrieved evidence | Hybrid ReAct: baseline retrieval → single LLM call → optional `needs_more_evidence` loop (capped at 2 iterations) |
 | `critic_agent.py` | Quality gate; decide pass/fail and emit revision instruction | Single structured LLM call, no retrieval, 8-point checklist |
-| `presenter_agent.py` | Format the reviewed assessment into 6 display-ready dashboard sections + warnings + disclaimer | Pure programmatic formatter — no LLM call (deliberate: MVP plan forbids new reasoning by the Presenter) |
+| `presenter_agent.py` | Format reviewed assessment into 6 dashboard sections; builds claims table + citation cards from resolved chunk metadata | Pure programmatic formatter — no LLM call |
 
 ### Built-in corpus (`corpus/`)
 
@@ -113,7 +115,8 @@ run_assessment_pipeline(session_id)
    ├── critic_agent               → verdict_v1
    ├── (if fail) assessment_agent → assessment_v2  (revision)
    ├── (if fail) critic_agent     → verdict_v2
-   └── presenter_agent            → display-ready sections + warnings
+   ├── resolve_citations(all cited chunk IDs + evidence cache)
+   └── presenter_agent(chunk_lookup) → claims table, citation cards, warnings
    ↓
 { assessment, critic, presented, history[], _meta }
 ```

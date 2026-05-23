@@ -26,6 +26,7 @@ Returns a single dict with:
 from __future__ import annotations
 
 from src.retrieval import retrieve_combined_context, STANDARD_QUERIES
+from src.citation_resolver import resolve_citations
 from src.agents.assessment_agent import assessment_agent
 from src.agents.critic_agent import critic_agent
 from src.agents.presenter_agent import presenter_agent
@@ -86,14 +87,22 @@ def run_assessment_pipeline(
         assessment = revised
         verdict = verdict_v2
 
-    presented = presenter_agent({
-        "assessment": assessment,
-        "critic": verdict,
-        "_meta": {
-            "revision_triggered": revision_triggered,
-            "iterations": len(history),
+    chunk_lookup = resolve_citations(
+        _collect_chunk_ids(assessment),
+        session_id=session_id,
+        evidence_cache=uploaded_chunks + corpus_chunks,
+    )
+    presented = presenter_agent(
+        {
+            "assessment": assessment,
+            "critic": verdict,
+            "_meta": {
+                "revision_triggered": revision_triggered,
+                "iterations": len(history),
+            },
         },
-    })
+        chunk_lookup=chunk_lookup,
+    )
     history.append({"stage": "presenter", "output": presented})
 
     return {
@@ -106,3 +115,15 @@ def run_assessment_pipeline(
             "iterations": len(history),
         },
     }
+
+
+def _collect_chunk_ids(assessment: dict) -> list[str]:
+    ids: list[str] = []
+    pa = assessment.get("preliminary_assessment") or {}
+    ids.extend(pa.get("legal_citations") or [])
+    for fact in (assessment.get("extracted_facts") or {}).values():
+        if isinstance(fact, dict):
+            ids.extend(fact.get("evidence") or [])
+    for obs in assessment.get("governance_observations") or []:
+        ids.extend(obs.get("citations") or [])
+    return [c for c in ids if c]

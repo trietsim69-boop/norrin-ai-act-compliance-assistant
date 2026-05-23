@@ -222,3 +222,7 @@ data/uploaded/
 data/converted_markdown/
 data/vector_store/
 data/outputs/
+
+# IDE files
+.idea/
+
