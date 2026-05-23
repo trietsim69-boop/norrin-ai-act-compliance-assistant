@@ -1,5 +1,5 @@
 """
-Multi-agent orchestration: Assessment -> Critic -> (optional Revise once) -> Final.
+Multi-agent orchestration: Assessment -> Critic -> (optional Revise once) -> Presenter.
 
 Public entry point:
     run_assessment_pipeline(session_id, session_metadata=None) -> dict
@@ -8,19 +8,19 @@ Returns a single dict with:
     {
       "assessment": <final assessment dict>,
       "critic":     <final critic verdict>,
+      "presented":  <display-ready dashboard data from the Presenter Agent>,
       "history":    [
         {"stage": "assessment_v1", "output": {...}},
         {"stage": "critic_v1",     "output": {...}},
         {"stage": "assessment_v2", "output": {...}},   # only if revision happened
-        {"stage": "critic_v2",     "output": {...}}    # only if revision happened
+        {"stage": "critic_v2",     "output": {...}},   # only if revision happened
+        {"stage": "presenter",     "output": {...}}
       ],
       "_meta": {
         "revision_triggered": bool,
         "iterations": int
       }
     }
-
-The Presenter Agent (step 9) will consume this dict.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from __future__ import annotations
 from src.retrieval import retrieve_combined_context, STANDARD_QUERIES
 from src.agents.assessment_agent import assessment_agent
 from src.agents.critic_agent import critic_agent
+from src.agents.presenter_agent import presenter_agent
 
 MAX_REVISIONS = 1  # MVP plan says exactly one revision pass
 
@@ -85,9 +86,20 @@ def run_assessment_pipeline(
         assessment = revised
         verdict = verdict_v2
 
+    presented = presenter_agent({
+        "assessment": assessment,
+        "critic": verdict,
+        "_meta": {
+            "revision_triggered": revision_triggered,
+            "iterations": len(history),
+        },
+    })
+    history.append({"stage": "presenter", "output": presented})
+
     return {
         "assessment": assessment,
         "critic": verdict,
+        "presented": presented,
         "history": history,
         "_meta": {
             "revision_triggered": revision_triggered,

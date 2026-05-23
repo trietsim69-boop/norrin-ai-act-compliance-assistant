@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23
+**Last updated:** 2026-05-23 (Presenter Agent added)
 
 ---
 
@@ -21,7 +21,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | 7 | Assessment Agent with structured JSON output | done + tested (mock mode) |
 | 8 | Critic Agent with pass/fail loop | done + tested (mock mode) |
 | 8b | **Pipeline orchestrator** (extension of plan) | done + tested |
-| 9 | Presenter Agent | not done |
+| 9 | Presenter Agent | done + tested |
 | 10 | Dashboard display | not done |
 | 11 | Follow-up input + re-run | not done |
 | 12 | Demo cases + trigger tests | not done |
@@ -48,7 +48,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 |---|---|---|
 | `assessment_agent.py` | Produce a structured first-pass EU AI Act assessment from retrieved evidence | Hybrid ReAct: baseline retrieval → single LLM call → optional `needs_more_evidence` loop (capped at 2 iterations) |
 | `critic_agent.py` | Quality gate; decide pass/fail and emit revision instruction | Single structured LLM call, no retrieval, 8-point checklist |
-| `presenter_agent.py` | Format the reviewed assessment into the 6 dashboard sections | not built yet |
+| `presenter_agent.py` | Format the reviewed assessment into 6 display-ready dashboard sections + warnings + disclaimer | Pure programmatic formatter — no LLM call (deliberate: MVP plan forbids new reasoning by the Presenter) |
 
 ### Built-in corpus (`corpus/`)
 
@@ -106,9 +106,10 @@ run_assessment_pipeline(session_id)
    ├── assessment_agent           → assessment_v1
    ├── critic_agent               → verdict_v1
    ├── (if fail) assessment_agent → assessment_v2  (revision)
-   └── (if fail) critic_agent     → verdict_v2
+   ├── (if fail) critic_agent     → verdict_v2
+   └── presenter_agent            → display-ready sections + warnings
    ↓
-{ assessment, critic, history[], _meta }
+{ assessment, critic, presented, history[], _meta }
 ```
 
 ---
@@ -124,10 +125,9 @@ run_assessment_pipeline(session_id)
 
 ## 5. What's next
 
-1. **Step 9 — Presenter Agent** (`src/agents/presenter_agent.py`). Pure formatter, no new reasoning. Turns the pipeline output into the 6 dashboard sections.
-2. **Step 10 — Streamlit dashboard** (`app.py`). Upload UI, disclaimer, analyze button, render Presenter output.
-3. **Step 11 — Follow-up input**. User answers a missing-information question → appended to session context → pipeline re-runs.
-4. **Step 12 — Demo cases + trigger tests** (`demo_cases/`, `tests/expected_triggers.json`).
+1. **Step 10 — Streamlit dashboard** (`app.py`). Upload UI, disclaimer, analyze button. Reads `result["presented"]` from `run_assessment_pipeline` and renders the 6 sections plus warnings.
+2. **Step 11 — Follow-up input**. User answers a missing-information question → appended to session context → pipeline re-runs.
+3. **Step 12 — Demo cases + trigger tests** (`demo_cases/`, `tests/expected_triggers.json`).
 
 ---
 
