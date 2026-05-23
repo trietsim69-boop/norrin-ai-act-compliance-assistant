@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23 (demo cases + trigger-based evaluation harness)
+**Last updated:** 2026-05-23 (UI redesign, citation layer, demo evaluation harness)
 
 ---
 
@@ -12,19 +12,21 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 
 | # | Step | Status |
 |---|---|---|
-| 1 | Streamlit app shell | done (upload, disclaimer, analyze button — built into `app.py`) |
+| 1 | Streamlit app shell | **done** — upload, manual description, disclaimer, progress bar, intake/results split |
 | 2 | MarkItDown file conversion (`preprocessing.py`) | done + tested |
 | 3 | Chunking function (`chunking.py`) | done + tested |
 | 4 | Chroma vector store + config (`vector_store.py`, `config.py`) | done + tested |
-| 5 | Built-in AI Act corpus + `load_corpus_to_chroma()` | done (1,874 chunks loaded) |
-| 6 | Retrieval functions (`retrieval.py`) | done + tested |
-| 7 | Assessment Agent with structured JSON output | done + tested (mock mode) |
-| 8 | Critic Agent with pass/fail loop | done + tested (mock mode) |
-| 8b | **Pipeline orchestrator** (extension of plan) | done + tested |
-| 9 | Presenter Agent | done + tested |
-| 10 | Dashboard display (`app.py`) | done + launch-tested |
-| 11 | Follow-up input + re-run | done (built into `app.py` "Missing info & follow-up" tab) |
-| 12 | Demo cases + trigger tests | done (`demo_cases/`, `tests/expected_triggers.json`, `src/evaluation.py`, `scripts/run_trigger_tests.py`) |
+| 5 | Built-in AI Act corpus + `load_corpus_to_chroma()` | done (1,874 chunks when loaded) |
+| 6 | Retrieval functions (`retrieval.py`) | done + tested (8 standard queries + metadata-targeted corpus pulls) |
+| 7 | Assessment Agent with structured JSON output | done + tested (mock + real LLM) |
+| 8 | Critic Agent with pass/fail loop | done + tested (mock + real LLM) |
+| 8b | Pipeline orchestrator (`pipeline.py`) | done + tested |
+| 9 | Presenter Agent | done + tested (programmatic formatter) |
+| 10 | Dashboard display (`app.py`) | **done** — dark IBM Plex theme, overview cards, 6 tabs, citation cards, agent trace |
+| 11 | Follow-up input + re-run | done — sidebar “Refine the assessment” after first run |
+| 12 | Demo cases + trigger tests | done — `demo_cases/`, `tests/expected_triggers.json`, `src/evaluation.py`, `scripts/run_trigger_tests.py` |
+
+**MVP steps 1–12 are complete.** Further work is polish (export, deployment, real-LLM regression runs).
 
 ---
 
@@ -34,129 +36,140 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 
 | File | Responsibility |
 |---|---|
-| `app.py` | Streamlit dashboard. Upload UI, optional metadata form, runs the full pipeline, renders 6 sections in tabs, shows agent history, supports follow-up answers that trigger a pipeline re-run. |
+| `app.py` | Streamlit dashboard: intake view (upload + manual text), results view (report tabs), sidebar case metadata + follow-up, runs full pipeline with progress stages, renders overview cards, citations, agent history |
 
 ### Source code (`src/`)
 
 | File | Responsibility | Key exports |
 |---|---|---|
-| `config.py` | Central config — paths, model names, chunk settings, MOCK_LLM flag, API keys (from env) | All constants used app-wide |
-| `preprocessing.py` | Convert uploads (PDF/DOCX/PPTX/HTML/CSV/TXT/MD) → Markdown via MarkItDown | `process_uploaded_files`, `convert_file_to_markdown` |
+| `config.py` | Central config — paths, model names, chunk settings, `MOCK_LLM`, API keys | All constants used app-wide |
+| `preprocessing.py` | Convert uploads (PDF/DOCX/PPTX/HTML/CSV/TXT/MD) → Markdown via MarkItDown | `process_uploaded_files`, `process_manual_description` |
 | `chunking.py` | Paragraph/sentence-aware chunker with metadata + overlap | `chunk_text`, `chunk_document` |
-| `vector_store.py` | Chroma client + collections (`uploaded_docs_collection`, `ai_act_corpus_collection`) + corpus loader | `add_chunks_to_uploaded`, `load_corpus_to_chroma`, `get_uploaded_collection`, `get_corpus_collection`, `delete_session_chunks` |
-| `retrieval.py` | RAG layer: 8 standard queries, dedup, distance-sorted results | `retrieve_uploaded_context`, `retrieve_ai_act_context`, `retrieve_combined_context`, `STANDARD_QUERIES` |
-| `citation_resolver.py` | Resolve chunk_id → human-readable citation cards (Chroma lookup + evidence cache + chunk-ID heuristic) | `resolve_citations`, `resolve_citation`, `format_source_label` |
-| `citation_relevance.py` | Score claim↔excerpt alignment, precise claim labels, relevance explanations, primary vs additional filter | `enrich_citation_row`, `build_system_inference` |
-| `llm.py` | LLM provider abstraction (DeepSeek / OpenAI / Anthropic) + mock-mode switch | `call_llm`, `is_mock_mode` |
-| `pipeline.py` | Multi-agent orchestrator: Assessment → Critic → (revise once if fail) | `run_assessment_pipeline` |
-| `evaluation.py` | Trigger-based demo evaluation: ingest demo_cases, run pipeline, score against `tests/expected_triggers.json` | `run_all_trigger_tests`, `run_trigger_test`, `evaluate_pipeline_result` |
+| `vector_store.py` | Chroma client, session-scoped uploads + global corpus collection, corpus loader | `add_chunks_to_uploaded`, `load_corpus_to_chroma`, `delete_session_chunks` |
+| `corpus_metadata.py` | Law layer, topic, citation labels on corpus chunks; targeted retrieval inference | `enrich_corpus_chunk`, `infer_retrieval_targets`, `build_citation_label` |
+| `retrieval.py` | RAG: 8 standard queries, dedup, metadata-filtered corpus pulls | `retrieve_combined_context`, `STANDARD_QUERIES` |
+| `citation_resolver.py` | Resolve internal chunk IDs → human-readable citation cards | `resolve_citations`, `format_source_label` |
+| `citation_relevance.py` | Claim↔excerpt relevance scoring, primary vs additional tier, system-inference block | `enrich_citation_row`, `build_system_inference` |
+| `llm.py` | LLM abstraction (DeepSeek / OpenAI / Anthropic) + mock switch | `call_llm`, `is_mock_mode` |
+| `pipeline.py` | Orchestrator: Assessment → Critic → (one revision) → citation resolve → Presenter | `run_assessment_pipeline` |
+| `evaluation.py` | Trigger-based demo evaluation harness | `run_all_trigger_tests`, `run_trigger_test` |
 
 ### Agents (`src/agents/`)
 
 | File | Role | Architecture |
 |---|---|---|
-| `assessment_agent.py` | Produce a structured first-pass EU AI Act assessment from retrieved evidence | Hybrid ReAct: baseline retrieval → single LLM call → optional `needs_more_evidence` loop (capped at 2 iterations) |
-| `critic_agent.py` | Quality gate; decide pass/fail and emit revision instruction | Single structured LLM call, no retrieval, 8-point checklist |
-| `presenter_agent.py` | Format reviewed assessment into 6 dashboard sections; builds claims table + citation cards from resolved chunk metadata | Pure programmatic formatter — no LLM call |
+| `assessment_agent.py` | Structured EU AI Act assessment from retrieved evidence | Hybrid ReAct: baseline retrieval → LLM JSON → optional `needs_more_evidence` loop (max 2 iterations) |
+| `critic_agent.py` | Quality gate; pass/fail + revision instruction | Single structured LLM call, deterministic mock heuristics |
+| `presenter_agent.py` | Format assessment into dashboard sections + citation cards | Pure programmatic — no LLM |
 
 ### Built-in corpus (`corpus/`)
 
 | File | Source type | Chunks indexed |
 |---|---|---|
-| `EU_AI_Act.html` | Official regulation text (EUR-Lex) | 1,040 |
+| `EU_AI_Act.html` | Official regulation (EUR-Lex HTML) | 1,040 |
 | `Commission_Guidelines_on_the_definition_of_an_*.PDF` | Official guidance | 67 |
 | `Guidelines_on_prohibited_artificial_intelligence_*.PDF` | Official guidance | 767 |
 | **Total** | | **1,874** |
 
-Cached Markdown conversions live in `data/converted_markdown/_corpus/` and are re-used on subsequent runs.
+Cached Markdown: `data/converted_markdown/_corpus/`
 
 ### Demo cases (`demo_cases/`)
 
-Five folders with sample Markdown documents (2–3 files each) covering the MVP evaluation paths: HR screening, customer chatbot, workplace emotion detection, spam filter, LLM report generator. See [`demo_cases/README.md`](../demo_cases/README.md).
+Five folders, 14 sample Markdown files. See [`demo_cases/README.md`](../demo_cases/README.md).
 
 ### Tests
 
 | File | Purpose |
 |---|---|
-| `tests/expected_triggers.json` | Expected risk direction, domain trigger, and follow-up questions per demo case |
+| `tests/expected_triggers.json` | Expected risk direction, domain trigger, follow-up phrases per demo case |
 
 ### Scripts
 
 | File | Purpose |
 |---|---|
-| `scripts/load_corpus.py` | One-shot loader. Run once with `python -m scripts.load_corpus`. Use `--force` to wipe and reload. |
-| `scripts/run_trigger_tests.py` | Run trigger-based evaluation on all demo cases (`python -m scripts.run_trigger_tests`). Defaults to `MOCK_LLM=true`; pass `--real-llm` for live API runs. |
+| `scripts/load_corpus.py` | `python -m scripts.load_corpus` (add `--force` to reload) |
+| `scripts/run_trigger_tests.py` | `python -m scripts.run_trigger_tests` (add `--real-llm` for live API) |
 
 ### Config / infra
 
 | File | Purpose |
 |---|---|
-| `requirements.txt` | Pinned Python dependencies |
-| `.env.example` | Template — copy to `.env` and fill keys |
-| `.env` | Local secrets (git-ignored) |
-| `.gitignore` | Standard Python ignores + runtime data folders |
+| `requirements.txt` | Python dependencies (see file for stack breakdown) |
+| `.env.example` | Env template — copy to `.env` |
+| `.gitignore` | Python + `data/` runtime ignores |
 
-### Documentation (`docs/`)
+### Documentation
 
 | File | Purpose |
 |---|---|
-| `mvp_plan.md` | Original MVP plan (architecture, file responsibilities, demo cases, build order) |
-| `codebase_status.md` | This file — current build state |
+| `README.md` | Quick start, layout, env vars |
+| `AGENTS.md` | Contributor skillset + agent coding rules |
+| `docs/mvp_plan.md` | Original architecture plan |
+| `docs/codebase_status.md` | This file |
 
 ---
 
-## 3. Data flow currently working
+## 3. Data flow
 
 ```text
-User document
-   ↓ MarkItDown
-Markdown (data/converted_markdown/{session_id}/)
-   ↓ chunk_text
-Chunks with metadata
-   ↓ add_chunks_to_uploaded
-Chroma uploaded_docs_collection (filtered by session_id)
+User document / manual description
+   ↓ MarkItDown (uploads only)
+Markdown → chunk_document → add_chunks_to_uploaded
+Chroma uploaded_docs_collection (session_id filter)
 
-Corpus files (corpus/*.pdf, *.html)
-   ↓ load_corpus_to_chroma  (one-shot, cached)
+corpus/* → load_corpus_to_chroma (one-shot)
 Chroma ai_act_corpus_collection (1,874 chunks)
 
 run_assessment_pipeline(session_id)
-   ↓
-   ├── retrieve_combined_context(STANDARD_QUERIES) → baseline evidence
-   ├── assessment_agent           → assessment_v1
-   ├── critic_agent               → verdict_v1
-   ├── (if fail) assessment_agent → assessment_v2  (revision)
-   ├── (if fail) critic_agent     → verdict_v2
-   ├── resolve_citations(all cited chunk IDs + evidence cache)
-   └── presenter_agent(chunk_lookup) → claims table, citation cards, warnings
+   ├── retrieve_combined_context(STANDARD_QUERIES + metadata targets)
+   ├── assessment_agent → assessment_v1
+   ├── critic_agent → verdict_v1
+   ├── (if fail) assessment_agent → assessment_v2
+   ├── (if fail) critic_agent → verdict_v2
+   ├── resolve_citations(cited chunk IDs + evidence cache)
+   └── presenter_agent(chunk_lookup) → presented sections + warnings
    ↓
 { assessment, critic, presented, history[], _meta }
 ```
 
 ---
 
-## 4. Mock mode vs real LLM
+## 4. Streamlit UI (current)
 
-- `MOCK_LLM=true` (default in `.env`) → agents return pre-canned fixtures keyed to keyword signals. Full pipeline runs in ~12 s, zero API cost.
-- `MOCK_LLM=false` → same code path, hits the configured provider (`LLM_PROVIDER=deepseek` by default) using the key in `.env`.
-
-5 mock fixtures cover the 5 demo cases: HR screening, customer chatbot, workplace emotion detection, spam filter, GPAI report generator. The Critic uses deterministic heuristics that mirror real critic behavior (flags missing citations, over-confident prohibited findings, missing required sections).
-
----
-
-## 5. What's next
-
-1. **Optional: real-LLM run.** Flip `MOCK_LLM=false` in `.env` (or use `python -m scripts.run_trigger_tests --real-llm`) and verify agents against the live API on each demo case.
-2. **Optional: polish pass.** Improve UI styling, add export-to-report, add a portfolio comparison view, or add Finnish implementation context (bonus capabilities from the challenge brief).
+- **Theme:** dark navy, IBM Plex Serif/Sans/Mono
+- **Intake view:** file upload, manual description, run button with progress stages
+- **Results view:** overview cards (AI system, risk tier, confidence, critic verdict), six tabs (facts, assessment, governance, missing info, citations, agent trace)
+- **Sidebar:** case metadata form, follow-up refinement after first run, new assessment reset
+- **Citations tab:** primary vs additional evidence, system-inference block separated from direct quotes
 
 ---
 
-## 6. Update protocol
+## 5. Mock mode vs real LLM
 
-When making a major change (new agent, new pipeline stage, new file in `src/`, dependency change, breaking API change), update this file in the same commit:
+| Mode | Behaviour | Typical runtime |
+|---|---|---|
+| `MOCK_LLM=true` | Fixture responses keyed to document keywords | ~15–30 s per assessment |
+| `MOCK_LLM=false` | Live DeepSeek/OpenAI/Anthropic API (2–6 calls + optional revision) | ~2–5+ min |
 
-1. Bump the `Last updated` date at the top.
-2. Update the relevant row in section 1 (Build progress).
-3. Add/modify the entry in section 2 (Files).
-4. If the data flow changed, update section 3.
-5. Note breaking changes in a new "## Changelog" subsection if one becomes necessary.
+Five mock fixtures map to the five demo paths. Trigger tests: **5/5 pass** in mock mode (with corpus loaded).
+
+**Shell override:** a `MOCK_LLM` variable set in PowerShell takes precedence over `.env` because `load_dotenv()` does not override existing env vars by default.
+
+---
+
+## 6. What's next (optional)
+
+1. Real-LLM regression on all demo cases (`python -m scripts.run_trigger_tests --real-llm`)
+2. UI polish — hide internal chunk IDs in user-facing prose, persistent progress on reruns, export report
+3. Deployment — Streamlit Cloud or container; document production env setup
+
+---
+
+## 7. Update protocol
+
+On major changes, update this file in the same commit:
+
+1. Bump **Last updated** at the top
+2. Section 1 — build progress rows
+3. Section 2 — new/changed files
+4. Section 3/4 — if data flow or UI changed

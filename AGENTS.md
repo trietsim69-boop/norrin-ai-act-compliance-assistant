@@ -72,39 +72,37 @@ If you are an AI coding assistant editing this repository, follow these rules.
 
 ```text
 norrin-ai-act-compliance-assistant/
-├── app.py                         (Streamlit entry point — not built yet)
+├── app.py                         Streamlit entry point (intake + results views)
 ├── requirements.txt
-├── .env.example                   (template; never commit a real .env)
-├── AGENTS.md                      (this file)
-├── README.md
-├── corpus/                        (official EU AI Act + Commission guidelines)
-├── data/                          (runtime; git-ignored)
-│   ├── uploaded/{session_id}/
-│   ├── converted_markdown/{session_id}/
-│   ├── converted_markdown/_corpus/  (cached MarkItDown output for corpus files)
-│   ├── vector_store/                (Chroma persistent DB)
-│   └── outputs/
-├── corpus/                        (3 official documents, ~1,874 chunks once loaded)
-├── demo_cases/                    (sample documents per demo path)
+├── .env.example                   template; never commit a real .env
+├── AGENTS.md                      this file
+├── README.md                      quick start + layout
+├── corpus/                        official EU AI Act + Commission guidelines
+├── demo_cases/                    sample documents per evaluation path
 ├── docs/
-│   ├── mvp_plan.md                (the master plan)
-│   └── codebase_status.md         (living status; UPDATE on major changes)
+│   ├── mvp_plan.md                master architecture plan
+│   └── codebase_status.md         living status (UPDATE on major changes)
 ├── scripts/
-│   └── load_corpus.py             (one-shot corpus loader)
+│   ├── load_corpus.py             one-shot corpus loader
+│   └── run_trigger_tests.py       demo-case trigger evaluation
 ├── src/
-│   ├── config.py                  (single source of truth for settings/paths)
-│   ├── preprocessing.py           (MarkItDown)
+│   ├── config.py                  settings, paths, env
+│   ├── preprocessing.py           MarkItDown conversion
 │   ├── chunking.py
-│   ├── vector_store.py            (Chroma)
-│   ├── retrieval.py               (RAG layer)
-│   ├── llm.py                     (provider abstraction + mock mode)
-│   ├── pipeline.py                (multi-agent orchestrator)
+│   ├── vector_store.py            Chroma + corpus loader
+│   ├── corpus_metadata.py         law-layer/topic metadata on corpus chunks
+│   ├── retrieval.py               RAG layer
+│   ├── citation_resolver.py       chunk_id → citation cards
+│   ├── citation_relevance.py      relevance scoring + system-inference block
+│   ├── llm.py                     provider abstraction + mock mode
+│   ├── pipeline.py                multi-agent orchestrator
+│   ├── evaluation.py              trigger-test harness
 │   └── agents/
-│       ├── assessment_agent.py    (hybrid ReAct, structured JSON)
-│       ├── critic_agent.py        (pass/fail + revision instruction)
-│       └── presenter_agent.py     (not built yet — pure formatter)
+│       ├── assessment_agent.py    hybrid ReAct, structured JSON
+│       ├── critic_agent.py        pass/fail + revision instruction
+│       └── presenter_agent.py     programmatic dashboard formatter
 └── tests/
-    └── expected_triggers.json     (not built yet)
+    └── expected_triggers.json     expected outcomes per demo case
 ```
 
 ### Build / run commands
@@ -115,8 +113,9 @@ norrin-ai-act-compliance-assistant/
 | Load EU AI Act corpus into Chroma (one-shot) | `python -m scripts.load_corpus` |
 | Force-reload corpus after editing the loader | `python -m scripts.load_corpus --force` |
 | Run trigger tests on demo cases (mock mode) | `python -m scripts.run_trigger_tests` |
-| Run Streamlit UI (when built) | `streamlit run app.py` |
-| Quick mock-mode pipeline check (when needed) | write a temp script under `scripts/`, run `python -m scripts.<name>`, then delete it |
+| Run trigger tests with live LLM | `python -m scripts.run_trigger_tests --real-llm` |
+| Run Streamlit UI | `streamlit run app.py --server.port 8521` |
+| Run Streamlit (less dev watcher overhead) | `streamlit run app.py --server.port 8521 --server.fileWatcherType none` |
 
 ### Environment
 
@@ -130,9 +129,11 @@ Read from `.env` via `src.config`. Never hard-code provider URLs, model names, o
 | `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | only required when `MOCK_LLM=false` |
 | `EMBEDDING_PROVIDER` | `local` (default, no key) or `openai` |
 
+**Note:** If `MOCK_LLM` is already set in the shell environment, it overrides `.env` (python-dotenv default). Unset or set explicitly before `streamlit run` when switching modes.
+
 ### Coding rules
 
-1. **No new top-level frameworks without discussion** — keep the stack to: Streamlit, MarkItDown, Chroma, OpenAI/Anthropic SDKs, SentenceTransformers, python-dotenv, pydantic. Do not introduce LangChain, LlamaIndex, etc.
+1. **No new top-level frameworks without discussion** — keep the stack to: Streamlit, MarkItDown, Chroma, OpenAI/Anthropic SDKs, SentenceTransformers, python-dotenv. Do not introduce LangChain, LlamaIndex, etc.
 2. **All paths and constants live in `src/config.py`.** Never hard-code paths in modules.
 3. **Every agent must support mock mode.** Every `call_llm(...)` invocation must pass a `mock=...` fixture. Mock fixtures live inline at the bottom of each agent file.
 4. **Agents return structured JSON, not free text.** Use `response_format="json"` and parse defensively.

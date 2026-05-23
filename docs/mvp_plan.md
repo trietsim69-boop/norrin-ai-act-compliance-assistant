@@ -1,5 +1,7 @@
 # Norrin AI Act Assistant — Simple MVP Structure
 
+> **Implementation status (2026-05-23):** MVP steps 1–12 are complete. For the live file list, UI behaviour, and run commands, see [`codebase_status.md`](./codebase_status.md) and [`README.md`](../README.md). This document remains the original architecture plan.
+
 ## 1. General Idea
 
 Build a small app where the user uploads documents about **one AI use case**, then the system gives a **first-pass EU AI Act assessment**.
