@@ -1,171 +1,217 @@
-# AGENTS.md
+# Agent design — Norrin AI Act Compliance Assistant
 
-Guide for any agent — human or AI — working on the **Norrin AI Act Compliance Assistant**.
+This document explains **multi-agent roles** for judges and developers. Implementation: `src/agents/`, orchestrated by `src/pipeline.py`.
 
-This file is intentionally split into two parts:
-1. **For humans** — the skillset required to contribute productively to this codebase.
-2. **For AI coding agents** — conventions, build/test commands, and rules to respect when editing.
-
-Both audiences should also read [`docs/mvp_plan.md`](./docs/mvp_plan.md) (architecture) and [`docs/codebase_status.md`](./docs/codebase_status.md) (current state).
+For the full pipeline narrative see [`docs/multi_agent_pipeline.md`](docs/multi_agent_pipeline.md).
 
 ---
 
-## Part 1 — Skillset required (for humans joining the project)
+## Pipeline orchestrator (`src/pipeline.py`)
 
-This project sits at the intersection of three domains. You don't need to be expert in all three, but the team collectively must cover them.
+**Role:** Coordinates stages; agents do not call each other directly.
 
-### A. EU AI Act — domain knowledge (essential)
-
-You should be comfortable reading and reasoning about:
-- **Article 3** — definition of an AI system; the "inference" test
-- **Article 5** — prohibited practices, especially **5(1)(f) workplace emotion recognition** and 5(1)(a)/(b) manipulation
-- **Article 6 + Annex III** — high-risk classification, all 8 high-risk domains (especially area 4 employment, area 5 essential services)
-- **Article 50** — transparency obligations (chatbot disclosure, deepfakes, AI-generated content labelling)
-- **Chapter V** — General-Purpose AI (GPAI) provider vs deployer obligations
-- The **provider vs deployer** distinction (Chapter III roles)
-
-Without this knowledge you cannot:
-- Validate the agent's outputs
-- Write meaningful mock fixtures
-- Author useful demo cases
-- Judge whether the system is producing legally-sane reasoning
-
-Reference material lives in `corpus/` (the actual regulation + Commission guidelines).
-
-### B. Retrieval-Augmented Generation (RAG) engineering
-
-- **Chunking** strategies (size, overlap, boundary awareness) and their effect on retrieval quality
-- **Embeddings** (we use SentenceTransformers `all-MiniLM-L6-v2` locally; OpenAI `text-embedding-3-small` if `EMBEDDING_PROVIDER=openai`)
-- **Vector databases** — specifically Chroma (collections, metadata filters, distance metrics, persistent client)
-- **Semantic search trade-offs** — when retrieval fails silently, when to re-query, when distance scores are misleading
-- **Multi-collection patterns** — session-scoped vs global corpus, and how to keep them separate
-
-### C. Multi-agent LLM orchestration
-
-- **Prompt engineering** — system prompts as agent "personalities", structured JSON output, schema enforcement
-- **Tool / function calling** patterns (OpenAI-compatible API, including DeepSeek)
-- **Agent loops** — ReAct (Thought → Action → Observation), Critic loops, bounded iteration
-- **Provider abstraction** — supporting multiple LLM backends (OpenAI, Anthropic, DeepSeek) behind one interface
-- **Mock-mode discipline** — keeping the system runnable offline with fixture responses
-
-### D. Python / Streamlit / packaging (supporting)
-
-- Python 3.13+ idioms (type hints, `pathlib`, dataclasses optional)
-- `python-dotenv` for env management
-- **Streamlit** for the UI shell — `st.session_state`, file uploaders, expanders, sidebars
-- `requirements.txt` discipline — pinned versions, minimal surface area
-- `.gitignore` discipline — secrets and runtime data never committed
-
-### E. Soft skills
-
-- **Epistemic humility** — outputs must read as preliminary, never as final legal advice
-- **Citation discipline** — every legal claim must trace back to a corpus chunk
-- **Transparency over confidence** — flagging "I don't know" is more valuable than guessing
-
----
-
-## Part 2 — Conventions for AI coding agents
-
-If you are an AI coding assistant editing this repository, follow these rules.
-
-### Project layout (canonical)
+**Flow:**
 
 ```text
-norrin-ai-act-compliance-assistant/
-├── app.py                         Streamlit regulatory console (UI + session orchestration)
-├── .streamlit/config.toml         light theme (cream bg, dark text)
-├── requirements.txt
-├── .env.example                   template; never commit a real .env
-├── AGENTS.md                      this file
-├── README.md                      quick start + layout
-├── corpus/                        official EU AI Act HTML + Commission guideline PDFs
-├── demo_cases/                    sample documents per evaluation path
-├── docs/
-│   ├── mvp_plan.md                master architecture plan (+ implementation notes)
-│   └── codebase_status.md         living status (UPDATE on major changes)
-├── scripts/
-│   ├── load_corpus.py             one-shot corpus loader
-│   └── run_trigger_tests.py       demo-case trigger evaluation
-├── src/
-│   ├── config.py                  settings, paths, env
-│   ├── preprocessing.py           MarkItDown conversion
-│   ├── chunking.py
-│   ├── vector_store.py            Chroma + corpus loader
-│   ├── corpus_metadata.py         law-layer/topic metadata on corpus chunks
-│   ├── retrieval.py               RAG layer
-│   ├── citation_resolver.py       chunk_id → citation cards
-│   ├── citation_relevance.py      relevance scoring + system-inference block
-│   ├── llm.py                     provider abstraction + mock mode
-│   ├── pipeline.py                multi-agent orchestrator
-│   ├── evaluation.py              trigger-test harness
-│   └── agents/
-│       ├── assessment_agent.py    hybrid ReAct, structured JSON
-│       ├── critic_agent.py        pass/fail + revision instruction
-│       └── presenter_agent.py     programmatic dashboard formatter
-└── tests/
-    └── expected_triggers.json     expected outcomes per demo case
+retrieve_combined_context()
+  → assessment_agent()           # v1
+  → critic_agent()
+  → [if fail] assessment_agent() # v2 (revision)
+  → [if fail] critic_agent()     # v2
+  → resolve_citations()
+  → presenter_agent()
 ```
 
-### Build / run commands
+**Returns:** `{ assessment, critic, presented, history[], _meta }`
 
-| Action | Command (PowerShell, from repo root) |
-|---|---|
-| Install dependencies | `pip install -r requirements.txt` |
-| Load EU AI Act corpus into Chroma (one-shot) | `python -m scripts.load_corpus` |
-| Force-reload corpus after editing the loader | `python -m scripts.load_corpus --force` |
-| Run trigger tests on demo cases (mock mode) | `python -m scripts.run_trigger_tests` |
-| Run trigger tests with live LLM | `python -m scripts.run_trigger_tests --real-llm` |
-| Run Streamlit UI | `streamlit run app.py --server.port 8521` |
-| Run Streamlit (less dev watcher overhead) | `streamlit run app.py --server.port 8521 --server.fileWatcherType none` |
+- `history[]` — one entry per stage (`assessment_v1`, `critic_v1`, optional v2, `presenter`)
+- `_meta.revision_triggered` — whether critic forced one revision pass (`MAX_REVISIONS = 1`)
 
-**UI changes** belong in `app.py` only unless adding shared helpers — see [`docs/codebase_status.md`](./docs/codebase_status.md) §4 for the current console layout (tabs, nav pages, sidebar).
+---
+
+## Assessment Agent (`src/agents/assessment_agent.py`)
+
+**Role:** Primary legal-technical reasoning from **retrieved evidence only**.
+
+### Input
+
+- `session_id` — namespaces uploaded chunks in Chroma  
+- `session_metadata` — case name, sector, org role, deployment context, follow-up answers  
+- Retrieved `uploaded_chunks` + `corpus_chunks` (via `retrieve_combined_context`)  
+- **Revision mode:** `previous_assessment` + `revision_instruction` from Critic  
+
+Agents never receive the raw Chroma client or full vector DB.
+
+### Autonomous decisions
+
+- Which uploaded facts matter vs boilerplate  
+- Risk path to explore (employment, transparency, prohibited practices, GPAI, etc.)  
+- Whether the system meets the AI Act definition (Art. 3)  
+- Preliminary risk tier and confidence  
+- Governance observations proportional to risk  
+- Which `chunk_id` values cite each claim  
+- What information is missing and which follow-up questions to suggest  
+
+### Output schema (structured JSON)
+
+Top-level keys:
+
+| Key | Purpose |
+|-----|---------|
+| `use_case_summary` | Plain-language summary |
+| `extracted_facts` | purpose, sector, affected persons, automation, oversight, uses_gpai, … each with `value`, `confidence`, `evidence[]` |
+| `preliminary_assessment` | `ai_system`, `risk_tier`, `confidence`, `reasoning`, `legal_citations[]` |
+| `governance_observations[]` | area, observation, citations |
+| `missing_information` | gaps + follow-up questions |
+| `needs_more_evidence` | optional ReAct loop — extra search queries |
+
+Plus `_meta` (iterations, chunk counts, revision flag).
+
+### When it asks for more evidence
+
+Hybrid **ReAct** loop (max 2 iterations): if the model returns `needs_more_evidence` queries, the agent runs additional retrieval on uploaded + corpus collections, dedupes, and re-prompts — bounded to avoid runaway loops.
+
+### Mock mode
+
+`MOCK_LLM=true` → keyword-matched fixtures for five demo paths (offline demos).
+
+---
+
+## Critic Agent (`src/agents/critic_agent.py`)
+
+**Role:** Quality gate — **does not rewrite the assessment**; pass/fail + revision instruction.
+
+### Input
+
+- Assessment JSON from Assessment Agent  
+- Same `uploaded_chunks` + `corpus_chunks` the assessor saw  
+
+### Checklist
+
+1. Required sections present  
+2. Citation support — legal claims cite corpus IDs; facts cite uploads or are flagged missing  
+3. Evidence separation — uploads vs regulation/guidance  
+4. Confidence calibration — low when facts are missing; high only with clear cited support  
+5. Useful missing-info / follow-up questions  
+6. Legal safety — qualified language, not final legal advice  
+7. Source relevance — corpus cites match claimed risk category  
+8. Internal contradictions  
+
+### Pass/fail logic
+
+- **`pass: true`** — well-grounded, cited, appropriately qualified  
+- **`pass: false`** — issues listed with severity; **`revision_instruction`** — single concrete fix for Assessment Agent  
+- **`missing_questions[]`** — expert questions for humans  
+
+Pipeline runs **at most one** revision cycle when `pass=false` and instruction is non-empty.
+
+### Mock mode
+
+Deterministic heuristics (missing citations, overconfidence on high-risk claims, etc.).
+
+---
+
+## Presenter Agent (`src/agents/presenter_agent.py`)
+
+**Role:** **Deterministic formatter** — converts assessment + critic + resolved citations into dashboard sections.
+
+### Why no LLM
+
+The MVP plan forbids new legal reasoning at presentation time. A programmatic formatter:
+
+- Adds **no** new legal conclusions  
+- Renders instantly (no API latency/cost)  
+- Makes output reproducible for judges  
+
+### Autonomous formatting decisions (non-legal)
+
+- Risk tier labels and warning severity  
+- Grouping governance items and fact cards  
+- Primary vs additional citation tiers (via `citation_relevance.py`)  
+- System-inference block separated from direct quotes  
+- Standard disclaimer text  
+
+### Output
+
+`presented` dict: `sections` (summary, facts, assessment, governance, missing, citations), `warnings[]`, `disclaimer`, `_meta`.
+
+---
+
+## Citation resolver (`src/citation_resolver.py`) — **not an agent**
+
+**Role:** Python utility — maps internal `chunk_id` strings to **human-readable evidence cards**.
+
+### Resolution order
+
+1. Chroma lookup (uploaded or corpus collection)  
+2. Evidence cache (chunks already retrieved this session)  
+3. Chunk-ID heuristic (parse `corpus_*` / `sess_*` patterns)  
+
+### Output per chunk
+
+`source`, `source_label`, `evidence_type`, `excerpt`, `full_text`, `law_layer_label`, `topic_label`, `section`, `found`, `resolver`.
+
+Used by Presenter and Streamlit UI via `format_source_label()` — raw chunk IDs hidden from main view (debug expander only).
+
+Details: [`docs/citation_and_evidence.md`](docs/citation_and_evidence.md)
+
+---
+
+## Human contributor conventions
+
+Build commands, env vars, coding rules, and anti-patterns: see **Part 2** below (unchanged from project conventions).
+
+### Project layout
+
+```text
+app.py                    Streamlit UI
+src/pipeline.py           orchestrator
+src/agents/               assessment, critic, presenter
+src/retrieval.py          RAG boundary
+src/citation_resolver.py  evidence cards
+src/citation_relevance.py scoring + tiers
+docs/                     architecture + judge docs
+```
+
+### Build / run
+
+| Action | Command |
+|--------|---------|
+| Load corpus | `python -m scripts.load_corpus` |
+| Run UI | `streamlit run app.py --server.port 8521` |
+| Trigger tests | `python -m scripts.run_trigger_tests` |
+
+See [`docs/setup_and_run.md`](docs/setup_and_run.md).
 
 ### Environment
 
-Read from `.env` via `src.config`. Never hard-code provider URLs, model names, or paths — add them to `src/config.py`.
+| Var | Purpose |
+|-----|---------|
+| `MOCK_LLM` | `true` offline fixtures / `false` live API |
+| `LLM_PROVIDER` | `deepseek` / `openai` / `anthropic` |
+| `EMBEDDING_PROVIDER` | `local` / `openai` |
 
-| Env var | Purpose |
-|---|---|
-| `MOCK_LLM` | `true` runs all agents from fixtures (offline). `false` hits the real LLM. |
-| `LLM_PROVIDER` | `deepseek` (default) / `openai` / `anthropic` |
-| `LLM_MODEL` | provider-specific model name |
-| `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | only required when `MOCK_LLM=false` |
-| `EMBEDDING_PROVIDER` | `local` (default, no key) or `openai` |
+Never commit `.env`.
 
-**Note:** If `MOCK_LLM` is already set in the shell environment, it overrides `.env` (python-dotenv default). Unset or set explicitly before `streamlit run` when switching modes.
+### Multi-agent rules (must preserve)
 
-### Coding rules
+- Distinct Assessment / Critic / Presenter roles — do not collapse into one LLM call  
+- Structured JSON between stages  
+- Bounded revision: **exactly one** critic-triggered revision  
+- Visible `history[]` for transparency  
+- Update [`docs/codebase_status.md`](docs/codebase_status.md) on major changes  
 
-1. **No new top-level frameworks without discussion** — keep the stack to: Streamlit, MarkItDown, Chroma, OpenAI/Anthropic SDKs, SentenceTransformers, python-dotenv. Do not introduce LangChain, LlamaIndex, etc.
-2. **All paths and constants live in `src/config.py`.** Never hard-code paths in modules.
-3. **Every agent must support mock mode.** Every `call_llm(...)` invocation must pass a `mock=...` fixture. Mock fixtures live inline at the bottom of each agent file.
-4. **Agents return structured JSON, not free text.** Use `response_format="json"` and parse defensively.
-5. **Agents receive only retrieved chunks, never the raw vector DB or Chroma client.** Retrieval is the boundary.
-6. **Every legal claim cites a corpus `chunk_id`. Every fact cites an uploaded `chunk_id` (or is flagged as missing).**
-7. **Outputs must never read as final legal advice.** Use qualified language; the disclaimer is always present.
-8. **Never commit `.env`.** Confirm `git status` does not show it before any commit.
-9. **Update `docs/codebase_status.md`** in the same commit as any major change (new agent, new pipeline stage, new file in `src/`, dependency change, breaking API change).
-10. **Comments narrate intent, not behavior.** Avoid restating what the code does; explain non-obvious decisions only.
+### Anti-patterns
 
-### Multi-agent design (must preserve)
+- Embedding full corpus in prompts instead of retrieving  
+- Giving agents direct Chroma access  
+- Presenter adding new legal reasoning via LLM  
+- Hiding critic failures or skipping `_meta`  
 
-The challenge is evaluated partly on multi-agent design. Do not collapse the agents into a single LLM call. The required properties are:
+---
 
-- **Distinct roles** — Assessment (reasoning), Critic (quality gate), Presenter (formatting only)
-- **Structured intermediate outputs** — JSON dicts passed between stages
-- **Autonomous decisions per agent** — risk path selection, citation gaps, pass/fail, revision instructions
-- **A bounded revision loop** — exactly one revision pass when the critic fails the assessment
-- **Visible history** — `pipeline.run_assessment_pipeline` returns a `history[]` with every stage, used in the UI for transparency
+## Further reading
 
-### Anti-patterns to avoid
-
-- Embedding the full corpus in a prompt instead of retrieving chunks
-- Giving any agent access to `get_uploaded_collection()` or `get_corpus_collection()` directly
-- Returning prose where JSON is expected
-- Adding a new dependency to bypass writing ~50 lines of glue code
-- Hiding stack traces in `try/except: pass`
-- Skipping `_meta` fields in returned dicts (they power the UI's transparency story)
-
-### When in doubt
-
-Default to: small, testable, mock-friendly, structured-JSON. Re-read `docs/mvp_plan.md` if you are unsure whether something belongs.
+- [`docs/multi_agent_pipeline.md`](docs/multi_agent_pipeline.md) — judge-focused pipeline narrative  
+- [`docs/architecture.md`](docs/architecture.md) — system components  
+- [`docs/mvp_plan.md`](docs/mvp_plan.md) — product scope  
