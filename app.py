@@ -1,5 +1,5 @@
 """
-Norrin AI Act Compliance Assistant — Streamlit dashboard (dark theme).
+Norrin AI Act Compliance Assistant — Streamlit compliance console.
 
 Run with:
     streamlit run app.py
@@ -8,20 +8,24 @@ Run with:
 from __future__ import annotations
 
 import html
+import json
+import re
 import time
 import uuid
 from pathlib import Path
 
 import streamlit as st
 
-from src.config import MOCK_LLM
+from src.config import MOCK_LLM, CORPUS_DIR
 from src.preprocessing import process_uploaded_files, process_manual_description
 from src.chunking import chunk_document
 from src.vector_store import (
     add_chunks_to_uploaded,
     delete_session_chunks,
+    get_corpus_collection,
 )
 from src.pipeline import run_assessment_pipeline
+from src.citation_resolver import format_source_label
 
 
 # ---------------------------------------------------------------------------
@@ -32,439 +36,408 @@ def _inject_theme() -> None:
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
         :root {
-            --bg-deep: #070b14;
-            --bg-main: #0a1020;
-            --bg-panel: #111827;
-            --bg-card: #151f33;
-            --border: rgba(148, 163, 184, 0.14);
-            --border-accent: rgba(96, 165, 250, 0.35);
-            --text: #e2e8f0;
-            --text-muted: #94a3b8;
-            --accent: #60a5fa;
-            --accent-soft: rgba(96, 165, 250, 0.12);
-            --success: #34d399;
-            --warning: #fbbf24;
-            --danger: #f87171;
-            --serif: "IBM Plex Serif", Georgia, serif;
-            --sans: "IBM Plex Sans", system-ui, sans-serif;
-            --mono: "IBM Plex Mono", ui-monospace, monospace;
+            --bg: #f5f2ea;
+            --card: #faf8f0;
+            --card-white: #ffffff;
+            --green: #00543f;
+            --green-dark: #073b2e;
+            --text: #102a24;
+            --muted: #61736b;
+            --border: #d8d1bf;
+            --warn-bg: #fff4c2;
+            --info-bg: #ddecf5;
         }
 
-        .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            background: var(--bg-deep) !important;
-            color: var(--text);
-            font-family: var(--sans);
-        }
-
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0c1222 0%, #0a0f1c 100%) !important;
-            border-right: 1px solid var(--border);
-        }
-
-        [data-testid="stSidebar"] .block-container {
-            padding-top: 1.25rem;
-        }
-
-        h1, h2, h3, .norrin-title {
-            font-family: var(--serif) !important;
-            font-weight: 600 !important;
-            letter-spacing: -0.01em;
-        }
-
-        h1 { color: #f8fafc !important; font-size: 2.35rem !important; }
-        h2, h3 { color: #f1f5f9 !important; }
-
-        code, .stCode, .session-pill, [data-testid="stCode"] {
-            font-family: var(--mono) !important;
-        }
-
-        p, label, .stMarkdown, .stCaption, [data-testid="stWidgetLabel"] {
-            font-family: var(--sans) !important;
+        html, body, .stApp, [data-testid="stAppViewContainer"],
+        [data-testid="stAppViewContainer"] > section {
+            background: var(--bg) !important;
+            color: var(--text) !important;
+            font-family: Inter, "Segoe UI", system-ui, sans-serif !important;
+            font-size: 15px !important;
         }
 
         #MainMenu, footer, header[data-testid="stHeader"] {
-            visibility: hidden;
-            height: 0 !important;
+            visibility: hidden; height: 0 !important;
         }
 
         .block-container {
-            padding-top: 1.5rem;
-            max-width: 1180px;
+            padding-top: 0.5rem;
+            padding-bottom: 2rem;
+            max-width: 1320px;
         }
 
-        /* Sidebar brand */
-        .sidebar-brand {
+        h1, h2, h3, h4 {
+            font-family: Georgia, "Times New Roman", serif !important;
+            color: var(--green-dark) !important;
+            font-weight: 600 !important;
+        }
+
+        p, li, span, label, .stMarkdown, [data-testid="stMarkdownContainer"] p {
+            color: var(--text) !important;
+            line-height: 1.55 !important;
+        }
+
+        [data-testid="stCaptionContainer"] p, .stCaption {
+            color: var(--muted) !important;
+            font-size: 0.82rem !important;
+        }
+
+        [data-testid="stWidgetLabel"] p {
+            color: var(--muted) !important;
+            font-weight: 600 !important;
+        }
+
+        .stTextInput input, .stTextArea textarea,
+        div[data-baseweb="select"] > div {
+            background: #fff !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+        }
+
+        .stButton > button {
+            background: #fff !important;
+            color: var(--text) !important;
+            border: 1px solid var(--border) !important;
+            font-weight: 500 !important;
+        }
+        .stButton > button[kind="primary"],
+        button[kind="primary"] {
+            background-color: #00543F !important;
+            color: #FFFFFF !important;
+            border: 1px solid #00543F !important;
+            font-weight: 600 !important;
+        }
+        .stButton > button[kind="primary"]:hover {
+            background-color: #004030 !important;
+            border-color: #004030 !important;
+        }
+        .stButton > button[kind="primary"] p,
+        .stButton > button[kind="primary"] span,
+        .stButton > button[kind="primary"] div,
+        .stButton > button[kind="primary"] [data-testid="stMarkdownContainer"] p {
+            color: #FFFFFF !important;
+        }
+
+        div[data-testid="stMetric"] {
+            background: var(--card-white) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 4px !important;
+            padding: 0.6rem !important;
+        }
+        [data-testid="stMetricLabel"] p {
+            color: var(--muted) !important;
+            font-size: 0.7rem !important;
+            font-weight: 600 !important;
+            text-transform: uppercase !important;
+        }
+        [data-testid="stMetricValue"] {
+            color: var(--green-dark) !important;
+            font-family: Georgia, serif !important;
+            font-size: 1.05rem !important;
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: var(--card-white) !important;
+            border-color: var(--border) !important;
+            border-radius: 6px !important;
+        }
+
+        [data-testid="stFileUploader"] section[data-testid="stFileUploadDropzone"] {
+            background: var(--card) !important;
+            border: 2px dashed var(--border) !important;
+            min-height: 120px;
+        }
+
+        .stProgress label, .stProgress p { color: var(--text) !important; }
+
+        /* Top nav */
+        .norrin-topnav {
             display: flex;
             align-items: center;
-            gap: 0.65rem;
-            margin-bottom: 1.5rem;
+            justify-content: space-between;
+            padding: 0.65rem 0 0.85rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1rem;
+            gap: 1rem;
+            flex-wrap: wrap;
         }
-        .sidebar-brand-icon {
-            width: 36px; height: 36px;
-            border-radius: 10px;
-            background: var(--accent-soft);
-            border: 1px solid var(--border-accent);
+        .norrin-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            min-width: 140px;
+        }
+        .norrin-logo {
+            width: 32px; height: 32px;
+            background: var(--green);
+            color: #fff;
             display: flex; align-items: center; justify-content: center;
-            font-size: 1.1rem;
-        }
-        .sidebar-brand-text {
-            line-height: 1.15;
-        }
-        .sidebar-brand-text strong {
-            display: block;
-            font-family: var(--sans);
-            font-size: 0.95rem;
+            font-family: Georgia, serif;
             font-weight: 700;
-            color: #f8fafc;
+            font-size: 1rem;
+            border-radius: 3px;
         }
-        .sidebar-brand-text span {
-            font-size: 0.62rem;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            color: var(--text-muted);
-        }
-
-        .sidebar-label {
-            font-size: 0.68rem;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--text-muted);
-            margin: 1rem 0 0.35rem;
+        .norrin-brand-name {
+            font-family: Georgia, serif;
+            font-size: 1.15rem;
             font-weight: 600;
+            color: var(--green-dark) !important;
+        }
+        .norrin-nav {
+            display: flex;
+            gap: 1.25rem;
+            flex-wrap: wrap;
+        }
+        .norrin-nav a {
+            color: var(--muted) !important;
+            text-decoration: none;
+            font-size: 0.88rem;
+            font-weight: 500;
+        }
+        .norrin-nav a.active {
+            color: var(--green-dark) !important;
+            font-weight: 600;
+            border-bottom: 2px solid var(--green);
+            padding-bottom: 2px;
+        }
+        .norrin-nav-ref {
+            color: var(--muted) !important;
+            font-size: 0.72rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
         }
 
-        .session-pill {
-            background: #0f172a;
+        /* Badges */
+        .risk-badge {
+            display: inline-block;
+            padding: 0.2rem 0.55rem;
+            border-radius: 3px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
             border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.55rem 0.75rem;
-            font-family: var(--mono);
-            font-size: 0.76rem;
-            color: #cbd5e1;
-            margin-bottom: 0.5rem;
+            margin-right: 0.5rem;
         }
+        .risk-badge.high { background: #fde8e8; color: #9b2c2c; border-color: #f5c6c6; }
+        .risk-badge.medium { background: var(--warn-bg); color: #7a5a00; border-color: #e6d08a; }
+        .risk-badge.low { background: #e8f0ec; color: var(--green); border-color: #b8d4c8; }
 
-        .case-context-bar {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 0.85rem 1rem;
-            margin: 0.75rem 0 1.25rem;
-            font-size: 0.84rem;
+        /* Risk hero */
+        .risk-hero {
+            border-radius: 6px;
+            padding: 1.15rem 1.25rem;
+            margin-bottom: 1rem;
+            border: 2px solid var(--border);
         }
-        .case-context-bar .case-title {
-            font-family: var(--serif);
-            font-size: 1.05rem;
-            color: #f8fafc;
+        .risk-hero.high { background: #fef5f5; border-color: #f5c6c6; }
+        .risk-hero.medium { background: #fffbea; border-color: #e6d08a; }
+        .risk-hero.low { background: #f0f7f4; border-color: #b8d4c8; }
+        .risk-hero-kicker {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--muted) !important;
             margin-bottom: 0.35rem;
         }
-        .case-context-bar .case-meta {
-            color: var(--text-muted);
-            font-size: 0.78rem;
-        }
-        .case-context-bar .case-files {
-            margin-top: 0.45rem;
-            font-family: var(--mono);
-            font-size: 0.72rem;
-            color: #94a3b8;
-        }
-
-        .view-kicker-results {
-            color: var(--success);
-        }
-
-        .config-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            padding: 0.35rem 0.65rem;
-            border-radius: 999px;
-            font-size: 0.72rem;
-            font-weight: 600;
+        .risk-hero-tier {
+            font-family: Georgia, "Times New Roman", serif;
+            font-size: 1.65rem;
+            font-weight: 700;
+            color: var(--green-dark) !important;
+            line-height: 1.2;
             margin-bottom: 0.45rem;
         }
-        .config-badge.mock-on {
-            background: rgba(52, 211, 153, 0.12);
-            color: var(--success);
-            border: 1px solid rgba(52, 211, 153, 0.25);
+        .risk-hero-meta {
+            font-size: 0.85rem;
+            color: var(--muted) !important;
+            margin-bottom: 0.65rem;
         }
-        .config-badge.mock-off {
-            background: rgba(251, 191, 36, 0.12);
-            color: var(--warning);
-            border: 1px solid rgba(251, 191, 36, 0.25);
-        }
-        .config-line {
-            font-size: 0.78rem;
-            color: var(--text-muted);
-            margin: 0.15rem 0;
+        .risk-hero-explain {
+            font-size: 0.92rem;
+            color: var(--text) !important;
+            line-height: 1.55;
+            max-width: 920px;
         }
 
-        .sidebar-hint {
-            font-size: 0.78rem;
-            color: var(--text-muted);
-            line-height: 1.45;
-            margin: 0.25rem 0 0.65rem;
+        .session-actions {
+            background: var(--card-white);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1rem;
         }
-        .sidebar-question {
-            font-size: 0.78rem;
-            color: #cbd5e1;
-            padding: 0.45rem 0.55rem;
-            margin-bottom: 0.35rem;
-            background: #0f172a;
-            border-radius: 8px;
-            border-left: 2px solid var(--accent);
-            line-height: 1.4;
-        }
-        .sidebar-prior {
-            font-size: 0.76rem;
-            color: var(--text-muted);
-            padding: 0.35rem 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        /* Main header */
-        .page-kicker {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.45rem;
+        .session-actions-title {
             font-size: 0.68rem;
-            letter-spacing: 0.14em;
+            font-weight: 700;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
-            color: var(--accent);
-            margin-bottom: 0.75rem;
-            font-weight: 600;
+            color: var(--muted) !important;
+            margin-bottom: 0.55rem;
         }
-        .page-subtitle {
-            color: var(--text-muted);
-            font-size: 1rem;
-            max-width: 720px;
-            margin-bottom: 1.25rem;
-        }
-        .demo-pill {
-            float: right;
+
+        /* Nav tabs */
+        .nav-active-hint {
             font-size: 0.72rem;
-            color: var(--text-muted);
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            padding: 0.25rem 0.65rem;
-            margin-top: 0.35rem;
+            color: var(--green-dark) !important;
+            font-weight: 600;
+            text-align: center;
+            margin-top: -0.35rem;
         }
 
-        .disclaimer-box {
-            background: rgba(249, 115, 22, 0.08);
-            border: 1px solid rgba(249, 115, 22, 0.35);
-            border-radius: 12px;
-            padding: 0.85rem 1rem;
-            margin: 1rem 0 1.5rem;
-            display: flex;
-            gap: 0.65rem;
-            align-items: flex-start;
+        /* Dark context panel */
+        .ctx-panel {
+            background: var(--green-dark);
+            color: #f4f7f5;
+            border-radius: 6px;
+            padding: 1rem 1.05rem;
+            margin-bottom: 1rem;
         }
-        .disclaimer-box strong { color: #fdba74; }
-        .disclaimer-box span { color: #fcd34d; font-size: 1rem; line-height: 1; margin-top: 0.1rem; }
-
-        .section-heading {
-            font-family: var(--serif) !important;
-            font-size: 1.35rem !important;
-            color: #f8fafc !important;
-            margin: 1.5rem 0 0.75rem !important;
-        }
-
-        /* Upload dropzone */
-        [data-testid="stFileUploader"] section[data-testid="stFileUploadDropzone"] {
-            background: rgba(15, 23, 42, 0.55) !important;
-            border: 2px dashed rgba(96, 165, 250, 0.38) !important;
-            border-radius: 14px !important;
-            padding: 2rem 1.5rem !important;
-        }
-        [data-testid="stFileUploader"] section[data-testid="stFileUploadDropzone"]:hover {
-            border-color: rgba(96, 165, 250, 0.65) !important;
-            background: rgba(30, 41, 59, 0.45) !important;
-        }
-        [data-testid="stFileUploader"] small {
-            color: var(--text-muted) !important;
-        }
-
-        /* Inputs */
-        .stTextArea textarea, .stTextInput input, .stSelectbox div[data-baseweb="select"] {
-            background: #0f172a !important;
-            border-color: var(--border) !important;
-            color: var(--text) !important;
-            border-radius: 10px !important;
-        }
-
-        /* Buttons */
-        .stButton > button[kind="primary"] {
-            background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
-            border: none !important;
-            border-radius: 10px !important;
-            font-weight: 600 !important;
-            padding: 0.55rem 1.25rem !important;
-        }
-        .stButton > button {
-            border-radius: 10px !important;
-            border: 1px solid var(--border) !important;
-            background: #111827 !important;
-            color: var(--text) !important;
-        }
-
-        /* Progress */
-        .stProgress > div > div > div > div {
-            background: linear-gradient(90deg, #2563eb, #60a5fa, #93c5fd) !important;
-            background-size: 200% 100%;
-            animation: progress-shimmer 1.8s ease-in-out infinite;
-        }
-        @keyframes progress-shimmer {
-            0% { background-position: 100% 0; }
-            100% { background-position: -100% 0; }
-        }
-
-        /* Overview cards */
-        .overview-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 1rem 1.1rem;
-            min-height: 96px;
-        }
-        .overview-card .label {
-            font-size: 0.68rem;
+        .ctx-panel .ctx-title {
+            font-size: 0.65rem;
             letter-spacing: 0.1em;
             text-transform: uppercase;
-            color: var(--text-muted);
-            margin-bottom: 0.45rem;
+            color: rgba(255,255,255,0.55);
+            margin-bottom: 0.85rem;
             font-weight: 600;
         }
-        .overview-card .value {
-            font-family: var(--serif);
-            font-size: 1.35rem;
-            font-weight: 600;
-            color: #f8fafc;
-            line-height: 1.2;
+        .ctx-panel .ctx-row {
+            margin-bottom: 0.65rem;
+            padding-bottom: 0.55rem;
+            border-bottom: 1px solid rgba(255,255,255,0.12);
         }
-        .overview-card.tone-success { border-color: rgba(52, 211, 153, 0.35); }
-        .overview-card.tone-success .value { color: #6ee7b7; }
-        .overview-card.tone-warning { border-color: rgba(251, 191, 36, 0.35); }
-        .overview-card.tone-warning .value { color: #fcd34d; }
-        .overview-card.tone-danger { border-color: rgba(248, 113, 113, 0.35); }
-        .overview-card.tone-danger .value { color: #fca5a5; }
-        .overview-card.tone-info { border-color: rgba(96, 165, 250, 0.35); }
-        .overview-card.tone-info .value { color: #93c5fd; }
+        .ctx-panel .ctx-row:last-child { border-bottom: none; margin-bottom: 0; }
+        .ctx-panel .ctx-lbl {
+            font-size: 0.62rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.5);
+            margin-bottom: 0.15rem;
+        }
+        .ctx-panel .ctx-val {
+            font-size: 0.88rem;
+            color: #fff !important;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+
+        /* Timeline */
+        .timeline-wrap { margin-top: 0.25rem; }
+        .tl-item {
+            display: flex;
+            gap: 0.65rem;
+            margin-bottom: 1rem;
+            position: relative;
+        }
+        .tl-dot-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 14px;
+            flex-shrink: 0;
+        }
+        .tl-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--green);
+            border: 2px solid var(--bg);
+            margin-top: 0.25rem;
+        }
+        .tl-dot.warn { background: #b8860b; }
+        .tl-line {
+            width: 2px;
+            flex-grow: 1;
+            background: var(--border);
+            margin-top: 4px;
+            min-height: 24px;
+        }
+        .tl-body { flex: 1; }
+        .tl-agent {
+            font-family: Georgia, serif;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--green-dark) !important;
+        }
+        .tl-badge {
+            display: inline-block;
+            font-size: 0.58rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            padding: 0.1rem 0.35rem;
+            border-radius: 3px;
+            margin-left: 0.35rem;
+            vertical-align: middle;
+        }
+        .tl-badge.pass { background: #e8f0ec; color: var(--green); border: 1px solid #b8d4c8; }
+        .tl-badge.revise { background: var(--warn-bg); color: #856404; border: 1px solid #e6d08a; }
+        .tl-badge.done { background: #eef2f0; color: var(--green-dark); border: 1px solid var(--border); }
+        .tl-detail {
+            font-size: 0.8rem;
+            color: var(--muted) !important;
+            margin-top: 0.2rem;
+            line-height: 1.4;
+        }
+
+        .section-rule {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 1.5rem 0 1rem;
+        }
+
+        .disclaimer-bar {
+            background: var(--warn-bg);
+            border: 1px solid #e6d08a;
+            border-left: 4px solid #b8860b;
+            padding: 0.6rem 0.85rem;
+            margin-bottom: 1rem;
+            font-size: 0.88rem;
+            color: var(--text) !important;
+            border-radius: 4px;
+        }
+
+        .gov-icon { color: var(--green); margin-right: 0.35rem; }
+
+        [data-testid="stSidebar"] {
+            background: var(--card-white) !important;
+            border-right: 1px solid var(--border) !important;
+        }
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] .stMarkdown,
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+            color: var(--text) !important;
+            opacity: 1 !important;
+        }
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3 {
+            color: var(--green-dark) !important;
+        }
 
         /* Tabs */
         .stTabs [data-baseweb="tab-list"] {
             gap: 0.35rem;
-            background: transparent;
             border-bottom: 1px solid var(--border);
         }
         .stTabs [data-baseweb="tab"] {
-            background: transparent;
-            color: var(--text-muted);
-            border-radius: 8px 8px 0 0;
-            font-size: 0.82rem;
-            font-weight: 500;
+            color: var(--muted) !important;
+            font-weight: 500 !important;
+            font-size: 0.88rem !important;
+            padding: 0.45rem 0.75rem !important;
         }
         .stTabs [aria-selected="true"] {
-            background: var(--bg-card) !important;
-            color: var(--accent) !important;
-            border: 1px solid var(--border);
-            border-bottom-color: var(--bg-card) !important;
+            color: var(--green-dark) !important;
+            font-weight: 600 !important;
+            border-bottom: 2px solid var(--green) !important;
         }
-
-        /* Citation cards */
-        .citation-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1rem 1.1rem;
-            margin-bottom: 0.75rem;
-        }
-        .citation-card .cat {
-            font-size: 0.68rem;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            color: var(--accent);
-            margin-bottom: 0.5rem;
-        }
-        .citation-row {
-            margin: 0.35rem 0;
-            font-size: 0.88rem;
-            line-height: 1.45;
-        }
-        .citation-row strong {
-            color: #cbd5e1;
-            font-weight: 600;
-        }
-        .citation-excerpt {
-            margin-top: 0.65rem;
-            padding: 0.65rem 0.75rem;
-            background: #0f172a;
-            border-left: 3px solid var(--accent);
-            border-radius: 0 8px 8px 0;
-            color: #cbd5e1;
-            font-style: italic;
-            font-size: 0.86rem;
-        }
-        .citation-why {
-            margin-top: 0.55rem;
-            font-size: 0.82rem;
-            color: var(--text-muted);
-        }
-
-        /* Fact rows */
-        .fact-row {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 0.75rem 1rem;
-            margin-bottom: 0.5rem;
-        }
-
-        /* Follow-up chat */
-        .followup-panel {
-            background: var(--bg-panel);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 1.1rem 1.25rem;
-            margin-top: 1.5rem;
-        }
-        .followup-panel h4 {
-            font-family: var(--serif) !important;
-            color: #f8fafc;
-            margin: 0 0 0.35rem;
-            font-size: 1.15rem;
-        }
-
-        /* Agent trace */
-        .trace-stage {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 0.65rem 0.85rem;
-            margin-bottom: 0.45rem;
-            font-size: 0.82rem;
-        }
-        .trace-stage strong { color: var(--accent); }
-
-        div[data-testid="stMetric"] {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 0.75rem;
-        }
-        div[data-testid="stMetricLabel"] { color: var(--text-muted) !important; }
-        div[data-testid="stMetricValue"] {
-            font-family: var(--serif) !important;
-            color: #f8fafc !important;
-        }
-
-        [data-testid="stExpander"] {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 10px;
+        .stTabs [data-baseweb="tab-panel"] {
+            padding-top: 0.85rem !important;
         }
         </style>
         """,
@@ -476,121 +449,732 @@ def _esc(text: str) -> str:
     return html.escape(str(text or ""))
 
 
-def _risk_tone(risk_label: str) -> str:
+def _kicker(text: str) -> None:
+    st.markdown(
+        f'<p style="margin:0 0 0.65rem;color:#61736b;font-size:0.72rem;'
+        f'font-weight:600;letter-spacing:0.05em;text-transform:uppercase;">{text}</p>',
+        unsafe_allow_html=True,
+    )
+
+
+def _section_heading(num: str, title: str) -> None:
+    st.markdown(
+        f'<p style="margin:0 0 0.5rem;color:#61736b;font-size:0.72rem;font-weight:600;'
+        f'letter-spacing:0.05em;text-transform:uppercase;">{num} · {title}</p>',
+        unsafe_allow_html=True,
+    )
+
+
+def _truncate(text: str, max_len: int = 80) -> str:
+    text = (text or "").strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len - 1].rsplit(" ", 1)[0]
+    return (cut or text[: max_len - 1]) + "…"
+
+
+def _display_title(session_metadata: dict) -> str:
+    case = (session_metadata or {}).get("case_name") or ""
+    if case.strip():
+        return _truncate(case.strip(), 80)
+    return "AI Use Case Assessment"
+
+
+_CHUNK_REF_RE = re.compile(r"\s*\((?:corpus|uploaded)_[^)]+\)\s*")
+
+
+def _clean_display_text(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = _CHUNK_REF_RE.sub(" ", str(text))
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
+def _render_top_nav(*, show_export: bool = False, result: dict | None = None) -> None:
+    active = st.session_state.get("active_page", "assessment")
+    nav_items = [
+        ("assessment", "Assessment Console"),
+        ("library", "Regulatory Library"),
+        ("audit", "Audit Logs"),
+    ]
+
+    nav_cols = st.columns([3, 5, 2])
+    with nav_cols[0]:
+        st.markdown(
+            """
+            <div class="norrin-brand" style="padding-top:0.15rem;">
+                <div class="norrin-logo">N</div>
+                <span class="norrin-brand-name">Norrin</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with nav_cols[1]:
+        bcols = st.columns(3)
+        for col, (page_key, label) in zip(bcols, nav_items):
+            with col:
+                is_active = active == page_key
+                if st.button(
+                    label,
+                    key=f"nav_{page_key}",
+                    type="primary" if is_active else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["active_page"] = page_key
+                    st.rerun()
+    with nav_cols[2]:
+        ref_col, btn_col = st.columns([1, 1])
+        with ref_col:
+            st.markdown(
+                '<p class="norrin-nav-ref" style="margin:0.55rem 0 0;text-align:right;">REF · EU-AI-2024-V1</p>',
+                unsafe_allow_html=True,
+            )
+        with btn_col:
+            if show_export and result is not None:
+                brief = {
+                    "session_id": st.session_state.get("session_id"),
+                    "presented": result.get("presented"),
+                    "assessment": result.get("assessment"),
+                    "critic": result.get("critic"),
+                }
+                st.download_button(
+                    "Export Brief",
+                    data=json.dumps(brief, indent=2, default=str),
+                    file_name=f"norrin_brief_{st.session_state.get('session_id', 'export')}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
+    st.markdown(
+        '<div style="border-bottom:1px solid #d8d1bf;margin-bottom:1rem;"></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _user_facing_source(card: dict) -> str:
+    resolved = card.get("_resolved") or card
+    label = format_source_label(resolved) if resolved else ""
+    if label and "_chunk" not in label.lower():
+        return label
+    return card.get("source") or card.get("source_label") or "Source not available"
+
+
+def _risk_badge_class(risk_label: str) -> str:
     lower = (risk_label or "").lower()
-    if any(k in lower for k in ("prohibited", "unacceptable", "high")):
-        return "tone-danger"
-    if any(k in lower for k in ("limited", "transparency")):
-        return "tone-warning"
-    if any(k in lower for k in ("minimal", "low")):
-        return "tone-success"
-    if any(k in lower for k in ("gpai", "unclear")):
-        return "tone-info"
-    return "tone-info"
+    if any(k in lower for k in ("prohibited", "high", "unacceptable")):
+        return "high"
+    if any(k in lower for k in ("limited", "unclear", "gpai")):
+        return "medium"
+    return "low"
 
 
-def _confidence_tone(confidence: str) -> str:
-    return {
-        "high": "tone-success",
-        "medium": "tone-warning",
-        "low": "tone-danger",
-    }.get((confidence or "").lower(), "tone-info")
+def _render_risk_hero(
+    *,
+    risk_label: str,
+    conf_val: str,
+    critic_label: str,
+    revision_triggered: bool,
+    explanation: str,
+) -> None:
+    badge_cls = _risk_badge_class(risk_label)
+    rev_note = " · Revised once" if revision_triggered else ""
+    meta_line = f"Confidence: {conf_val} · Critic: {critic_label.lower()}{rev_note}"
+    explain = _clean_display_text(explanation) or "See preliminary assessment below for full reasoning."
+    st.markdown(
+        f'<div class="risk-hero {badge_cls}">'
+        f'<div class="risk-hero-kicker">Risk tier</div>'
+        f'<div class="risk-hero-tier">{_esc(risk_label)}</div>'
+        f'<div class="risk-hero-meta">{_esc(meta_line)}</div>'
+        f'<div class="risk-hero-explain">{_esc(explain)}</div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 
-def _overview_card(label: str, value: str, tone: str = "tone-info") -> str:
-    return f"""
-    <div class="overview-card {tone}">
-        <div class="label">{_esc(label)}</div>
-        <div class="value">{_esc(value)}</div>
-    </div>
-    """
+def _render_context_panel_dark(
+    *,
+    session_id: str,
+    session_metadata: dict,
+    processed_docs: list[dict],
+    facts_section: dict | None,
+) -> None:
+    meta = session_metadata or {}
+    files = [d["filename"] for d in processed_docs if not d.get("error")]
+    sector = meta.get("sector_hint") or "—"
+    deployment = meta.get("deployment_context") or meta.get("case_name") or "—"
+    if len(str(deployment)) > 120:
+        deployment = str(deployment)[:117] + "…"
+    region = meta.get("region_eu_use") or "—"
+    model_notes = meta.get("model_gpai_notes") or "—"
+    for f in (facts_section or {}).get("facts") or []:
+        if f.get("key") == "uses_gpai" and model_notes == "—":
+            model_notes = f.get("value") or "—"
+            break
+    try:
+        corpus_n = get_corpus_collection().count()
+    except Exception:
+        corpus_n = "—"
+
+    rows = [
+        ("Sector", sector),
+        ("Deployment context", deployment),
+        ("Organisation role", meta.get("org_role") or "—"),
+        ("Region / EU use", region),
+        ("Model / GPAI signal", model_notes),
+        ("Source documents", f"{len(files)} file(s)"),
+        ("Corpus indexed", f"{corpus_n} regulation chunks"),
+        ("Session ID", session_id),
+    ]
+    row_html = "".join(
+        f'<div class="ctx-row"><div class="ctx-lbl">{_esc(k)}</div>'
+        f'<div class="ctx-val">{_esc(str(v))}</div></div>'
+        for k, v in rows
+    )
+    st.markdown(
+        f'<div class="ctx-panel"><div class="ctx-title">3 · System context</div>{row_html}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Read-only summary. Edit case metadata in the left sidebar → Save metadata.")
+
+
+def _metadata_form_sidebar() -> bool:
+    """Render sidebar metadata form. Returns True if saved."""
+    meta = st.session_state.get("session_metadata") or {}
+    with st.form("metadata_form_sidebar", clear_on_submit=False):
+        case_name = st.text_input(
+            "Use-case name",
+            value=meta.get("case_name") or "",
+            key="sidebar_meta_case_name",
+        )
+        sector_hint = st.text_input(
+            "Sector hint",
+            value=meta.get("sector_hint") or "",
+            key="sidebar_meta_sector",
+        )
+        org_role = st.selectbox(
+            "Organisation role / likely role",
+            options=["", "provider", "deployer", "both", "unclear"],
+            index=["", "provider", "deployer", "both", "unclear"].index(
+                meta.get("org_role") or ""
+            ),
+            key="sidebar_meta_org_role",
+        )
+        deployment_context = st.text_area(
+            "Deployment context",
+            value=meta.get("deployment_context") or "",
+            height=72,
+            key="sidebar_meta_deployment",
+        )
+        region_eu_use = st.text_input(
+            "Region / EU use",
+            value=meta.get("region_eu_use") or "",
+            placeholder="e.g. EU deployer, cross-border",
+            key="sidebar_meta_region",
+        )
+        model_gpai_notes = st.text_area(
+            "Model / GPAI notes",
+            value=meta.get("model_gpai_notes") or "",
+            height=72,
+            placeholder="e.g. Llama-3.1, OpenAI API, embeddings model",
+            key="sidebar_meta_gpai",
+        )
+        saved = st.form_submit_button("Save metadata", use_container_width=True, type="primary")
+        if saved:
+            st.session_state["session_metadata"] = {
+                "case_name": case_name.strip() or None,
+                "sector_hint": sector_hint.strip() or None,
+                "org_role": org_role or None,
+                "deployment_context": deployment_context.strip() or None,
+                "region_eu_use": region_eu_use.strip() or None,
+                "model_gpai_notes": model_gpai_notes.strip() or None,
+            }
+            st.toast("Metadata saved")
+            return True
+    return False
+
+
+def _render_regulatory_library() -> None:
+    st.markdown("## Regulatory Library")
+    st.markdown(
+        '<p style="color:#61736b;">Built-in corpus used for retrieval during assessment.</p>',
+        unsafe_allow_html=True,
+    )
+    try:
+        corpus_n = get_corpus_collection().count()
+    except Exception:
+        corpus_n = "—"
+
+    m1, m2 = st.columns(2)
+    m1.metric("Corpus indexed", f"{corpus_n} chunks")
+    m2.metric("Legal sources loaded", str(len(list(CORPUS_DIR.glob("*")))))
+
+    st.markdown("**Loaded legal sources**")
+    sources = [
+        ("EU AI Act (Regulation EU 2024/1689)", "EU_AI_Act.html"),
+        (
+            "Commission Guidelines — AI system definition (Art. 3)",
+            "Commission_Guidelines_on_the_definition_of_an_artificial_intelligence_system_*.PDF",
+        ),
+        (
+            "Commission Guidelines — Prohibited AI practices (Art. 5)",
+            "Guidelines_on_prohibited_artificial_intelligence_practices_*.PDF",
+        ),
+    ]
+    for title, fname in sources:
+        with st.container(border=True):
+            st.markdown(f"**{title}**")
+            st.caption(fname)
+
+    st.info(
+        "This corpus is embedded locally and retrieved by the Assessment Agent. "
+        "Uploaded documents are indexed separately per session."
+    )
+
+
+def _render_audit_logs(result: dict | None) -> None:
+    st.markdown("## Audit Logs")
+    st.caption(f"Session · {st.session_state.get('session_id', '—')}")
+
+    if result is None:
+        st.warning("No assessment has been run in this session yet.")
+        st.markdown("Run an assessment from **Assessment Console** to populate audit logs.")
+        return
+
+    critic = result.get("critic", {})
+    meta = result.get("presented", {}).get("_meta", {})
+    pipe_meta = result.get("_meta", {})
+    revision_triggered = bool(meta.get("revision_triggered") or pipe_meta.get("revision_triggered"))
+    critic_pass = critic.get("pass")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Critic verdict", "Pass" if critic_pass else "Revise" if critic_pass is False else "—")
+    c2.metric("Revision", "Yes" if revision_triggered else "No")
+    c3.metric("Pipeline stages", str(len(result.get("history") or [])))
+
+    st.markdown("**Recent assessment stages**")
+    history = result.get("history") or []
+    if not history:
+        st.caption("No pipeline history recorded.")
+        return
+
+    for h in history:
+        stage = h.get("stage", "—")
+        badge, detail = _timeline_summary(stage, h.get("output") or {})
+        badge_cls = "pass" if badge == "PASS" else "revise" if badge == "REVISE" else "done"
+        with st.container(border=True):
+            st.markdown(
+                f"**{_timeline_label(stage)}** "
+                f'<span class="tl-badge {badge_cls}">{badge}</span>',
+                unsafe_allow_html=True,
+            )
+            st.caption(detail)
+            with st.expander(f"Raw output — {stage}"):
+                st.json(h.get("output") or {}, expanded=False)
+
+
+def _rerun_assessment(session_id: str) -> None:
+    metadata = {
+        **(st.session_state.get("session_metadata") or {}),
+        "follow_up_answers": st.session_state.get("follow_up_answers") or [],
+    }
+    manual = metadata.get("manual_use_case_description")
+    if manual:
+        metadata["manual_use_case_description"] = manual
+    with st.spinner("Re-running assessment…"):
+        st.session_state["pipeline_result"] = run_assessment_pipeline(
+            session_id, session_metadata=metadata
+        )
+    st.session_state["app_view"] = "results"
+    st.session_state["active_page"] = "assessment"
+
+
+def _render_session_actions(session_id: str, *, location: str = "main") -> None:
+    """New case / Reassess controls for the results screen."""
+    prefix = f"{location}_"
+    can_reassess = bool(st.session_state.get("chunks")) and not st.session_state.get("is_running")
+
+    container_ctx = st.container(border=True) if location == "main" else st.container()
+    with container_ctx:
+        if location == "main":
+            st.markdown(
+                '<p class="session-actions-title" style="margin:0 0 0.5rem;">Session actions</p>',
+                unsafe_allow_html=True,
+            )
+            btn_new, btn_reassess, btn_hint = st.columns([1.1, 1.1, 3.8])
+        else:
+            btn_new, btn_reassess = st.columns(2)
+            btn_hint = None
+        with btn_new:
+            if st.button(
+                "↺ New case",
+                use_container_width=True,
+                key=f"{prefix}session_new_case",
+                help="Clear this session and start a fresh assessment.",
+            ):
+                _reset_session()
+                st.rerun()
+        with btn_reassess:
+            if st.button(
+                "↻ Reassess",
+                type="primary",
+                use_container_width=True,
+                disabled=not can_reassess,
+                key=f"{prefix}session_reassess",
+                help="Re-run the pipeline with the same documents and metadata.",
+            ):
+                _rerun_assessment(session_id)
+                st.rerun()
+        if btn_hint is not None:
+            with btn_hint:
+                st.markdown(
+                    '<p style="margin:0.35rem 0 0;color:#61736b;font-size:0.82rem;line-height:1.45;">'
+                    "<strong>New case</strong> clears this session and returns to upload. "
+                    "<strong>Reassess</strong> re-runs Assessment → Critic → Presenter "
+                    "using the same files and sidebar metadata.</p>",
+                    unsafe_allow_html=True,
+                )
+
+
+def _render_agent_timeline(
+    history: list[dict], revision_triggered: bool, *, compact: bool = False
+) -> None:
+    _section_heading("10", "Agent pipeline history")
+    if revision_triggered:
+        st.markdown(
+            '<p style="font-size:0.82rem;color:#61736b;margin-bottom:0.75rem;">'
+            "Critic triggered one revision pass.</p>",
+            unsafe_allow_html=True,
+        )
+
+    if not history:
+        st.caption("No pipeline history recorded.")
+        return
+
+    items_html: list[str] = []
+    for idx, h in enumerate(history):
+        stage = h["stage"]
+        out = h["output"]
+        agent = _timeline_label(stage)
+        badge, detail = _timeline_summary(stage, out)
+        badge_cls = "pass" if badge == "PASS" else "revise" if badge == "REVISE" else "done"
+        dot_cls = "warn" if badge == "REVISE" else ""
+        line_html = '<div class="tl-line"></div>' if idx < len(history) - 1 else ""
+        plain_detail = detail.replace("**", "")
+        items_html.append(
+            f'<div class="tl-item">'
+            f'<div class="tl-dot-col"><div class="tl-dot {dot_cls}"></div>{line_html}</div>'
+            f'<div class="tl-body">'
+            f'<span class="tl-agent">{_esc(agent)}</span>'
+            f'<span class="tl-badge {badge_cls}">{badge}</span>'
+            f'<div class="tl-detail">{_esc(plain_detail)}</div>'
+            f"</div></div>"
+        )
+
+    st.markdown(f'<div class="timeline-wrap">{"".join(items_html)}</div>', unsafe_allow_html=True)
+
+    if compact:
+        st.caption("Open the **Trace** tab for full agent outputs.")
+        return
+
+    for h in history:
+        with st.expander(f"Raw output — {h['stage']}", expanded=False):
+            st.json(h["output"], expanded=False)
+
+
+def _render_fact_card(fact: dict) -> None:
+    labels = [_user_facing_source(r) for r in (fact.get("evidence_resolved") or [])]
+    evidence = "; ".join(dict.fromkeys(l for l in labels if l and l != "—")) or "—"
+    with st.container(border=True):
+        st.markdown(
+            f'<p style="margin:0;font-size:0.72rem;font-weight:600;color:#b8860b;'
+            f'text-transform:uppercase;letter-spacing:0.04em;">{_esc(fact["label"])}</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(f"**{fact.get('value', '—')}**")
+        st.caption(f"Confidence: {fact.get('confidence', '—')} · Source: {evidence}")
 
 
 def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
     category = card.get("evidence_category_label") or card.get("evidence_category") or ""
     claim = card.get("claim") or ""
-    source = card.get("source") or card.get("source_label") or "—"
+    source = _user_facing_source(card)
     ev_type = card.get("evidence_type") or "Unknown"
     excerpt = (card.get("excerpt") or "").strip()
     explanation = (card.get("relevance_explanation") or "").strip()
     layer = card.get("law_layer_label")
     topic = card.get("topic_label")
 
-    rows = []
-    if show_claim and claim:
-        rows.append(f'<div class="citation-row"><strong>Claim:</strong> {_esc(claim)}</div>')
-    rows.append(f'<div class="citation-row"><strong>Source:</strong> {_esc(source)}</div>')
-    rows.append(f'<div class="citation-row"><strong>Type:</strong> {_esc(ev_type)}</div>')
-    if layer:
-        rows.append(f'<div class="citation-row"><strong>Layer:</strong> {_esc(layer)}</div>')
-    if topic:
-        rows.append(f'<div class="citation-row"><strong>Topic:</strong> {_esc(topic)}</div>')
+    with st.container(border=True):
+        if category:
+            st.caption(category.upper())
+        if show_claim and claim:
+            st.markdown(f"**Claim:** {claim}")
+        st.markdown(f"**Source:** {source}")
+        st.markdown(f"**Type:** {ev_type}")
+        if layer:
+            st.markdown(f"**Legal layer:** {layer}")
+        if topic:
+            st.markdown(f"**Topic:** {topic}")
+        if excerpt:
+            st.markdown(f'*"{excerpt}"*')
+        elif show_claim:
+            st.caption("Evidence excerpt not available.")
+        if explanation:
+            st.markdown(f"**Why this supports the claim:** {explanation}")
+        full = (card.get("full_text") or (card.get("_resolved") or {}).get("full_text") or "").strip()
+        if full:
+            with st.expander(f"Full source text ({len(full.split())} words)"):
+                st.text(full)
+        resolved = card.get("_resolved") or {}
+        chunk_id = resolved.get("chunk_id") or card.get("chunk_id") or ""
+        if chunk_id:
+            with st.expander("Debug — chunk ID"):
+                st.code(chunk_id)
+                st.caption(f"Resolver: {resolved.get('resolver', '—')}")
 
-    excerpt_html = ""
-    if excerpt:
-        excerpt_html = f'<div class="citation-excerpt">"{_esc(excerpt)}"</div>'
-    elif show_claim:
-        excerpt_html = '<div class="citation-row" style="color:var(--text-muted)">Evidence excerpt not available.</div>'
 
-    why_html = ""
-    if explanation:
-        why_html = f'<div class="citation-why"><strong>Why this supports the claim:</strong> {_esc(explanation)}</div>'
+def _render_warning_cards(warnings: list[dict]) -> None:
+    for w in warnings:
+        sev = w.get("severity", "low")
+        msg = w.get("message", "")
+        bg = "#fde8e8" if sev == "high" else "#fff4c2" if sev == "medium" else "#ddecf5"
+        st.markdown(
+            f'<div style="background:{bg};border:1px solid #d8d1bf;padding:0.55rem 0.75rem;'
+            f'border-radius:4px;margin:0.35rem 0;font-size:0.88rem;color:#102a24;">{_esc(msg)}</div>',
+            unsafe_allow_html=True,
+        )
 
-    cat_html = f'<div class="cat">{_esc(category)}</div>' if category else ""
 
-    st.markdown(
-        f'<div class="citation-card">{cat_html}{"".join(rows)}{excerpt_html}{why_html}</div>',
-        unsafe_allow_html=True,
+def _render_tab_overview(
+    *,
+    summary_body: str,
+    ai_label: str,
+    risk_label: str,
+    conf_val: str,
+    risk_explanation: str,
+    warnings: list[dict],
+    sections: dict,
+) -> None:
+    st.markdown("**Use-case summary**")
+    if summary_body:
+        st.write(summary_body)
+    else:
+        st.caption("No summary available.")
+
+    st.markdown("**Preliminary assessment snapshot**")
+    st.markdown(f"- **AI system:** {ai_label}")
+    st.markdown(f"- **Risk tier:** {risk_label}")
+    st.markdown(f"- **Confidence:** {conf_val}")
+    short_reason = _truncate(risk_explanation, 280)
+    if short_reason:
+        st.write(short_reason)
+
+    if warnings:
+        st.markdown("**Key warnings**")
+        _render_warning_cards(warnings)
+
+    miss_section = sections.get("missing_information", {})
+    follow_ups = (miss_section.get("follow_up_questions") or [])[:3]
+    if follow_ups:
+        st.markdown("**Top follow-up questions**")
+        for q in follow_ups:
+            st.write(f"- {q}")
+
+    gov_items = (sections.get("governance_observations", {}).get("items") or [])[:3]
+    if gov_items:
+        st.markdown("**Top governance notes**")
+        for item in gov_items:
+            with st.container(border=True):
+                st.markdown(f"**{item['area_label']}**")
+                st.caption(_truncate(item.get("observation") or "", 200))
+
+
+def _render_tab_assessment(pa_section: dict, ai_label: str, risk_label: str, conf_val: str) -> None:
+    if not pa_section:
+        st.caption("No assessment produced.")
+        return
+
+    st.markdown("**Why this classification**")
+    st.markdown(f"- **AI system:** {ai_label}")
+    st.markdown(f"- **Risk tier:** {risk_label}")
+    st.markdown(f"- **Confidence:** {conf_val}")
+
+    if pa_section.get("ai_system", {}).get("reasoning"):
+        st.markdown("**AI system definition**")
+        st.write(_clean_display_text(pa_section["ai_system"]["reasoning"]))
+
+    if pa_section.get("reasoning"):
+        st.markdown("**Risk classification reasoning**")
+        st.write(_clean_display_text(pa_section["reasoning"]))
+
+    conf_block = pa_section.get("confidence") or {}
+    conf_reason = conf_block.get("reasoning") or conf_block.get("explanation") or ""
+    if conf_reason:
+        st.markdown("**Confidence explanation**")
+        st.write(_clean_display_text(conf_reason))
+
+    resolved_cites = pa_section.get("legal_citations_resolved") or []
+    if resolved_cites:
+        st.markdown("**Legal basis**")
+        for r in resolved_cites:
+            _render_citation_card(
+                {
+                    "claim": "Legal basis for preliminary assessment",
+                    "source": r.get("source") or r.get("source_label"),
+                    "evidence_type": r.get("evidence_type"),
+                    "excerpt": r.get("excerpt"),
+                    "relevance_explanation": r.get("relevance_explanation"),
+                    "law_layer_label": r.get("law_layer_label"),
+                    "topic_label": r.get("topic_label"),
+                    "_resolved": r,
+                },
+                show_claim=False,
+            )
+
+
+def _render_tab_governance(sections: dict) -> None:
+    items = sections.get("governance_observations", {}).get("items", [])
+    if not items:
+        st.caption("No governance observations.")
+        return
+    for item in items:
+        with st.container(border=True):
+            st.markdown(
+                f'<p style="margin:0 0 0.35rem;color:#102a24;font-weight:600;">'
+                f'<span class="gov-icon">✓</span>{_esc(item["area_label"])}</p>',
+                unsafe_allow_html=True,
+            )
+            st.write(item["observation"])
+            resolved = item.get("citations_resolved") or []
+            if resolved:
+                labels = [_user_facing_source(r) for r in resolved]
+                st.caption("Sources: " + " · ".join(dict.fromkeys(labels)))
+
+
+def _render_tab_facts(facts_section: dict) -> None:
+    st.markdown("**What the agent read from your documents**")
+    facts = facts_section.get("facts", [])
+    if not facts:
+        st.caption("No facts extracted.")
+        return
+    for i in range(0, len(facts), 2):
+        ca, cb = st.columns(2)
+        with ca:
+            _render_fact_card(facts[i])
+        if i + 1 < len(facts):
+            with cb:
+                _render_fact_card(facts[i + 1])
+
+
+def _render_tab_missing(session_id: str, sections: dict) -> None:
+    miss_section = sections.get("missing_information", {})
+    missing = miss_section.get("missing", [])
+    follow_ups = miss_section.get("follow_up_questions", [])
+
+    if missing:
+        for m in missing:
+            with st.container(border=True):
+                st.markdown(f"**{m['topic']}**")
+                if m.get("why_it_matters"):
+                    st.caption(m["why_it_matters"])
+                if m.get("suggested_question"):
+                    st.write(f"_Suggested question:_ {m['suggested_question']}")
+    else:
+        st.caption("No gaps flagged.")
+
+    if follow_ups:
+        st.markdown("**Follow-up questions**")
+        for q in follow_ups:
+            st.write(f"- {q}")
+
+    st.markdown("**Answer follow-up questions or add new information**")
+    if st.session_state.get("clear_missing_follow_up"):
+        st.session_state["missing_follow_up_input"] = ""
+        st.session_state["clear_missing_follow_up"] = False
+
+    st.text_area(
+        "Follow-up input",
+        height=100,
+        placeholder="Add clarifications for the next assessment run…",
+        label_visibility="collapsed",
+        key="missing_follow_up_input",
     )
+    follow_up_text = st.session_state.get("missing_follow_up_input", "")
 
-    full = (card.get("full_text") or (card.get("_resolved") or {}).get("full_text") or "").strip()
-    if full:
-        with st.expander(f"View full source text ({len(full.split())} words)", expanded=False):
-            st.text(full)
+    bc1, bc2 = st.columns(2)
+    with bc1:
+        if st.button("Update assessment", type="primary", use_container_width=True, key="tab_update_assessment"):
+            if follow_up_text.strip():
+                _apply_follow_up(session_id, follow_up_text.strip())
+                st.rerun()
+            else:
+                st.toast("Add some text first.")
+    with bc2:
+        if st.button("Save as context only", use_container_width=True, key="tab_save_context"):
+            if follow_up_text.strip():
+                _store_follow_up_context(follow_up_text.strip())
+                st.session_state["clear_missing_follow_up"] = True
+                st.toast("Saved to session context.")
+                st.rerun()
+
+    if st.session_state.get("pending_follow_up_context"):
+        st.markdown("**Added context (pending re-run)**")
+        for i, ctx in enumerate(st.session_state["pending_follow_up_context"], start=1):
+            st.caption(f"#{i}: {ctx[:180]}{'…' if len(ctx) > 180 else ''}")
 
 
-def _confidence_badge(confidence: str) -> str:
-    icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(confidence, "⚪")
-    return f"{icon} {confidence}"
+def _render_tab_citations(sections: dict) -> None:
+    cit = sections.get("citations", {})
+    primary = cit.get("citation_cards") or cit.get("claims_table") or []
+    additional = cit.get("additional_evidence") or []
+    inference = cit.get("system_inference") or {}
+
+    st.markdown("**System inference (conclusions, not direct quotes)**")
+    st.caption(inference.get("note", ""))
+    if inference.get("ai_system_reasoning"):
+        st.markdown("*AI system conclusion:*")
+        st.write(_clean_display_text(inference["ai_system_reasoning"]))
+    if inference.get("risk_reasoning"):
+        st.markdown("*Risk classification conclusion:*")
+        st.write(_clean_display_text(inference["risk_reasoning"]))
+
+    st.markdown("**Supported facts and regulatory references**")
+    if primary:
+        for row in primary:
+            _render_citation_card(row)
+    else:
+        st.caption("No strong primary citations.")
+
+    if additional:
+        with st.expander(f"Additional evidence ({len(additional)} weaker matches)"):
+            for row in additional:
+                _render_citation_card(row)
 
 
-def _collect_suggested_questions(result: dict | None) -> list[str]:
-    if not result:
-        return []
-    presented = result.get("presented") or {}
-    miss = (presented.get("sections") or {}).get("missing_information") or {}
-    out: list[str] = []
-    for q in miss.get("follow_up_questions") or []:
-        if q and q not in out:
-            out.append(q)
-    for item in miss.get("missing") or []:
-        q = item.get("suggested_question")
-        if q and q not in out:
-            out.append(q)
-    critic_qs = (result.get("critic") or {}).get("missing_questions") or []
-    for q in critic_qs:
-        if q and q not in out:
-            out.append(q)
-    return out[:6]
+def _render_tab_trace(result: dict, revision_triggered: bool) -> None:
+    history = result.get("history") or []
+    _render_agent_timeline(history, revision_triggered, compact=False)
+
+
+def _store_follow_up_context(answer: str) -> None:
+    st.session_state.setdefault("pending_follow_up_context", [])
+    st.session_state["pending_follow_up_context"].append(answer.strip())
+    st.session_state["follow_up_answers"].append(answer.strip())
 
 
 def _apply_follow_up(session_id: str, answer: str) -> None:
     st.session_state["follow_up_answers"].append(answer.strip())
-    st.session_state["clear_follow_up_input"] = True
+    st.session_state["clear_missing_follow_up"] = True
     st.session_state["app_view"] = "results"
     sample_dir = Path("data") / "uploaded" / session_id
     sample_dir.mkdir(parents=True, exist_ok=True)
-    follow_up_path = sample_dir / f"follow_up_{len(st.session_state['follow_up_answers'])}.md"
-    follow_up_path.write_text(
-        f"# Follow-up clarification\n\n{answer.strip()}\n",
-        encoding="utf-8",
-    )
+    n = len(st.session_state["follow_up_answers"])
+    follow_up_path = sample_dir / f"follow_up_{n}.md"
+    follow_up_path.write_text(f"# Follow-up clarification\n\n{answer.strip()}\n", encoding="utf-8")
     docs = process_uploaded_files([follow_up_path], session_id=session_id)
     chunks: list[dict] = []
     for d in docs:
         chunks.extend(chunk_document(d))
     add_chunks_to_uploaded(chunks)
-
     metadata = {
         **(st.session_state["session_metadata"] or {}),
         "follow_up_answers": st.session_state["follow_up_answers"],
@@ -607,35 +1191,56 @@ def _reset_session() -> None:
         delete_session_chunks(sid)
     for k in (
         "session_id", "processed_docs", "chunks", "pipeline_result",
-        "session_metadata", "follow_up_answers", "is_running",
-        "clear_follow_up_input", "app_view",
+        "session_metadata", "follow_up_answers", "pending_follow_up_context",
+        "is_running", "clear_missing_follow_up", "app_view", "missing_follow_up_input",
+        "active_page",
     ):
         st.session_state.pop(k, None)
 
 
-def _case_context_html() -> str:
-    meta = st.session_state.get("session_metadata") or {}
-    case_name = meta.get("case_name") or "Assessment report"
-    sector = meta.get("sector_hint")
-    role = meta.get("org_role")
-    meta_bits = [b for b in (sector, role) if b]
-    meta_line = " · ".join(meta_bits) if meta_bits else "Preliminary EU AI Act review"
+def _timeline_label(stage: str) -> str:
+    return {
+        "assessment_v1": "Assessment Agent",
+        "critic_v1": "Critic Agent",
+        "assessment_v2": "Assessment Agent — revision",
+        "critic_v2": "Critic Agent — re-review",
+        "presenter": "Presenter Agent",
+    }.get(stage, stage)
 
-    files = [
-        d["filename"]
-        for d in (st.session_state.get("processed_docs") or [])
-        if not d.get("error")
-    ]
-    files_line = ", ".join(files) if files else "Manual description"
-    n_chunks = len(st.session_state.get("chunks") or [])
 
-    return f"""
-    <div class="case-context-bar">
-        <div class="case-title">{_esc(case_name)}</div>
-        <div class="case-meta">{_esc(meta_line)} · {_esc(n_chunks)} indexed chunks</div>
-        <div class="case-files">{_esc(files_line)}</div>
-    </div>
-    """
+def _timeline_summary(stage: str, out: dict) -> tuple[str, str]:
+    if stage.startswith("assessment"):
+        pa = out.get("preliminary_assessment", {})
+        badge = "DONE" if stage == "assessment_v2" else "DONE"
+        detail = (
+            f"Classified risk tier as {pa.get('risk_tier', '—')} "
+            f"(confidence: {pa.get('confidence', '—')})."
+        )
+        return badge, detail
+    if stage.startswith("critic"):
+        if out.get("pass"):
+            return "PASS", "No further revisions requested."
+        issues = len(out.get("issues") or [])
+        detail = f"Flagged {issues} issue(s). Returned for revision."
+        instr = out.get("revision_instruction") or ""
+        if instr:
+            detail += f" {instr[:140]}{'…' if len(instr) > 140 else ''}"
+        return "REVISE", detail
+    if stage == "presenter":
+        return "DONE", f"Formatted report with {len(out.get('warnings') or [])} warning(s)."
+    return "—", ""
+
+
+def _file_size_label(uploaded_file) -> str:
+    try:
+        size = uploaded_file.size
+        if size < 1024:
+            return f"{size} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.0f} KB"
+        return f"{size / (1024 * 1024):.1f} MB"
+    except Exception:
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -660,13 +1265,15 @@ def _init_state() -> None:
         "pipeline_result": None,
         "session_metadata": {},
         "follow_up_answers": [],
+        "pending_follow_up_context": [],
         "is_running": False,
-        "clear_follow_up_input": False,
+        "clear_missing_follow_up": False,
+        "missing_follow_up_input": "",
         "app_view": "intake",
+        "active_page": "assessment",
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
-
     if st.session_state.get("pipeline_result") is not None:
         st.session_state["app_view"] = "results"
 
@@ -674,179 +1281,135 @@ def _init_state() -> None:
 _init_state()
 session_id: str = st.session_state["session_id"]
 app_view: str = st.session_state["app_view"]
-has_results = app_view == "results" and st.session_state["pipeline_result"] is not None
-sidebar_questions = _collect_suggested_questions(st.session_state.get("pipeline_result"))
 
 
-# ---------------------------------------------------------------------------
-# Sidebar — case context, follow-up, session controls
-# ---------------------------------------------------------------------------
-
+# Sidebar — case metadata & session controls
 with st.sidebar:
+    st.markdown("### Case metadata")
+    st.caption("Describe the use case context for this session.")
+    if _metadata_form_sidebar():
+        st.rerun()
+    if MOCK_LLM:
+        st.caption("Demo mode — offline fixtures.")
+    st.divider()
+    st.markdown("**Session actions**")
+    _render_session_actions(session_id, location="sidebar")
+    st.caption(f"Session: `{session_id}`")
+
+
+active_page: str = st.session_state.get("active_page", "assessment")
+
+# Regulatory Library page
+if active_page == "library":
+    _render_top_nav(show_export=False)
     st.markdown(
-        """
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-icon">⚖️</div>
-            <div class="sidebar-brand-text">
-                <strong>Norrin</strong>
-                <span>AI Act Compliance</span>
-            </div>
-        </div>
-        """,
+        '<div class="disclaimer-bar"><strong>Decision-support tool only — not legal advice.</strong> '
+        "Outputs are preliminary and require review by qualified counsel.</div>",
         unsafe_allow_html=True,
     )
+    _render_regulatory_library()
+    st.stop()
 
-    st.markdown('<div class="sidebar-label">About this case</div>', unsafe_allow_html=True)
-    st.caption("Optional — helps tailor the assessment.")
-    with st.form("metadata_form", clear_on_submit=False):
-        case_name = st.text_input(
-            "What are you assessing?",
-            value=st.session_state["session_metadata"].get("case_name", ""),
-            placeholder="e.g. Recruitment screening AI",
-        )
-        sector_hint = st.text_input(
-            "Industry / sector",
-            value=st.session_state["session_metadata"].get("sector_hint", ""),
-            placeholder="HR, healthcare, fintech…",
-        )
-        org_role = st.selectbox(
-            "Your organisation's role",
-            options=["", "provider", "deployer", "both", "unclear"],
-            index=["", "provider", "deployer", "both", "unclear"].index(
-                st.session_state["session_metadata"].get("org_role", "")
-            ),
-        )
-        if st.form_submit_button("Save case details", use_container_width=True):
-            st.session_state["session_metadata"] = {
-                "case_name": case_name or None,
-                "sector_hint": sector_hint or None,
-                "org_role": org_role or None,
-            }
-            st.toast("Case details saved")
-
-    st.markdown('<div class="sidebar-label">Refine the assessment</div>', unsafe_allow_html=True)
-
-    if not has_results:
-        st.markdown(
-            '<p class="sidebar-hint">Run your first analysis from the main page. '
-            "Then come back here to answer open questions and update the results.</p>",
-            unsafe_allow_html=True,
-        )
-    else:
-        if sidebar_questions:
-            st.caption("Open questions from the assessment:")
-            for q in sidebar_questions:
-                st.markdown(f'<div class="sidebar-question">{_esc(q)}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<p class="sidebar-hint">No specific follow-ups flagged — '
-                "you can still add clarifications below.</p>",
-                unsafe_allow_html=True,
-            )
-
-        if st.session_state.get("clear_follow_up_input"):
-            st.session_state["follow_up_input"] = ""
-            st.session_state["clear_follow_up_input"] = False
-
-        st.text_area(
-            "Your answer or new context",
-            key="follow_up_input",
-            height=110,
-            placeholder="e.g. Recruiters must approve every shortlist before candidates are contacted.",
-            label_visibility="collapsed",
-        )
-
-        if st.button("Update assessment", type="primary", use_container_width=True):
-            answer = st.session_state.get("follow_up_input", "")
-            if answer.strip():
-                _apply_follow_up(session_id, answer.strip())
-                st.rerun()
-            else:
-                st.toast("Add a short answer first.")
-
-        if st.session_state["follow_up_answers"]:
-            with st.expander(
-                f"Previous updates ({len(st.session_state['follow_up_answers'])})",
-                expanded=False,
-            ):
-                for i, ans in enumerate(st.session_state["follow_up_answers"], start=1):
-                    preview = ans if len(ans) <= 120 else ans[:117] + "…"
-                    st.markdown(
-                        f'<div class="sidebar-prior"><strong>#{i}</strong> {_esc(preview)}</div>',
-                        unsafe_allow_html=True,
-                    )
-
-    st.divider()
-
-    if st.button("↺  New assessment", use_container_width=True):
-        _reset_session()
-        st.rerun()
-
-    with st.expander("Session reference", expanded=False):
-        st.code(session_id, language="text")
-        if MOCK_LLM:
-            st.caption("Demo mode — using offline fixtures.")
+# Audit Logs page
+if active_page == "audit":
+    _render_top_nav(show_export=st.session_state.get("pipeline_result") is not None,
+                    result=st.session_state.get("pipeline_result"))
+    st.markdown(
+        '<div class="disclaimer-bar"><strong>Decision-support tool only — not legal advice.</strong> '
+        "Outputs are preliminary and require review by qualified counsel.</div>",
+        unsafe_allow_html=True,
+    )
+    _render_audit_logs(st.session_state.get("pipeline_result"))
+    st.stop()
 
 
 # ---------------------------------------------------------------------------
-# Main — intake vs results (separate views)
+# Assessment Console — Intake
 # ---------------------------------------------------------------------------
 
 if app_view == "intake":
+    _render_top_nav(show_export=False)
+
     st.markdown(
-        """
-        <div>
-            <span class="demo-pill">Hackathon demo · v0.1</span>
-            <div class="page-kicker">⚖ EU AI ACT COMPLIANCE · NEW CASE</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.title("Norrin AI Act Compliance Assistant")
-    st.markdown(
-        '<p class="page-subtitle">Submit your AI use case once — documents, a short description, '
-        "or both. You'll land on a dedicated assessment report when analysis completes.</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        """
-        <div class="disclaimer-box">
-            <span>⚠</span>
-            <div><strong>Not legal advice.</strong> This tool produces a preliminary assessment for
-            structured review. It does not replace qualified legal counsel.</div>
-        </div>
-        """,
+        '<div class="disclaimer-bar"><strong>Decision-support tool only — not legal advice.</strong> '
+        "Outputs are preliminary and require review by qualified counsel.</div>",
         unsafe_allow_html=True,
     )
 
-    st.markdown('<h3 class="section-heading">Submit this AI use case</h3>', unsafe_allow_html=True)
-
-    uploaded_files = st.file_uploader(
-        "Upload documents (optional)",
-        type=["pdf", "docx", "pptx", "html", "htm", "csv", "txt", "md"],
-        accept_multiple_files=True,
-        help="PDF, DOCX, PPTX, HTML, CSV, TXT, or MD.",
-        label_visibility="collapsed",
+    st.markdown("## Submit AI use case")
+    st.markdown(
+        '<p style="color:#61736b;margin-top:-0.5rem;">Upload documents and/or describe the use case for a preliminary EU AI Act assessment.</p>',
+        unsafe_allow_html=True,
     )
 
-    st.markdown("**Or describe the AI use case manually**")
+    col_up, col_desc = st.columns(2, gap="large")
+    run_clicked = False
 
-    manual_description = st.text_area(
-        "Use-case description",
-        height=120,
-        placeholder=(
-            "Example: We use an AI tool to rank job applicants based on CVs and interview "
-            "transcripts. Recruiters review the top candidates before interview decisions."
-        ),
-        label_visibility="collapsed",
-    )
+    with col_up:
+        with st.container(border=True):
+            _section_heading("1", "Upload documents")
+            st.markdown(
+                '<p style="color:#61736b;font-size:0.82rem;margin:-0.25rem 0 0.75rem;">'
+                "PDF · DOCX · PPTX · HTML · CSV · TXT · MD</p>",
+                unsafe_allow_html=True,
+            )
+            uploaded_files = st.file_uploader(
+                "Upload documents",
+                type=["pdf", "docx", "pptx", "html", "htm", "csv", "txt", "md"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+            )
+            if uploaded_files:
+                st.markdown("**Selected files**")
+                for uf in uploaded_files:
+                    st.markdown(
+                        f'<div style="padding:0.35rem 0;border-bottom:1px solid #d8d1bf;'
+                        f'font-size:0.88rem;color:#102a24;">'
+                        f'<strong>{_esc(uf.name)}</strong> · {_file_size_label(uf)}</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No files selected yet.")
 
-    has_files = bool(uploaded_files)
-    has_manual = bool(manual_description.strip())
-    run_disabled = (not has_files and not has_manual) or st.session_state["is_running"]
-    run_label = "Run assessment" if not st.session_state["is_running"] else "Analysis running…"
+    with col_desc:
+        with st.container(border=True):
+            _section_heading("2", "Describe the use case")
+            st.markdown(
+                '<p style="color:#61736b;font-size:0.82rem;margin:-0.25rem 0 0.75rem;">'
+                "No document? Describe your AI use case here manually.</p>",
+                unsafe_allow_html=True,
+            )
+            manual_description = st.text_area(
+                "Use-case description",
+                height=150,
+                placeholder=(
+                    "Example: We use an AI tool to rank job applicants based on CVs. "
+                    "Recruiters review the top candidates before interview decisions."
+                ),
+                label_visibility="collapsed",
+            )
+            st.markdown(
+                '<p style="color:#61736b;font-size:0.78rem;margin-top:0.5rem;">'
+                "You can run an assessment from this description alone, or together with uploaded documents.</p>",
+                unsafe_allow_html=True,
+            )
+            has_files = bool(uploaded_files)
+            has_manual = bool(manual_description.strip())
+            run_disabled = (not has_files and not has_manual) or st.session_state["is_running"]
+            run_label = "Run assessment" if not st.session_state["is_running"] else "Analysis running…"
+            _, btn_col = st.columns([1, 1])
+            with btn_col:
+                run_clicked = st.button(
+                    run_label,
+                    type="primary",
+                    disabled=run_disabled,
+                    use_container_width=True,
+                    key="run_assessment_main",
+                )
+            if not has_files and not has_manual:
+                st.caption("Add at least one document or a use-case description to enable Run assessment.")
 
-    if st.button(run_label, type="primary", disabled=run_disabled, use_container_width=False):
+    if run_clicked:
         st.session_state["is_running"] = True
         st.session_state["pipeline_result"] = None
         delete_session_chunks(session_id)
@@ -863,7 +1426,6 @@ if app_view == "intake":
 
         st.session_state["processed_docs"] = docs
         progress.progress(28, text="Chunking documents…")
-
         chunks: list[dict] = []
         for d in docs:
             if d.get("error"):
@@ -871,7 +1433,6 @@ if app_view == "intake":
             chunks.extend(chunk_document(d))
         st.session_state["chunks"] = chunks
         progress.progress(52, text="Embedding and indexing…")
-
         add_chunks_to_uploaded(chunks)
         progress.progress(72, text="Running Assessment → Critic → Presenter…")
 
@@ -881,10 +1442,13 @@ if app_view == "intake":
         }
         if has_manual:
             metadata["manual_use_case_description"] = manual_description.strip()
+            st.session_state["session_metadata"] = {
+                **(st.session_state.get("session_metadata") or {}),
+                "manual_use_case_description": manual_description.strip(),
+            }
         result = run_assessment_pipeline(session_id, session_metadata=metadata)
         st.session_state["pipeline_result"] = result
         progress.progress(100, text=f"Done in {time.perf_counter() - t_start:.1f}s")
-
         st.session_state["is_running"] = False
         st.session_state["app_view"] = "results"
         st.rerun()
@@ -892,260 +1456,153 @@ if app_view == "intake":
     st.stop()
 
 
-# --- Results view -----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------------
 
 result = st.session_state.get("pipeline_result")
 if result is None:
     st.session_state["app_view"] = "intake"
     st.rerun()
 
+_render_top_nav(show_export=True, result=result)
+
 st.markdown(
-    """
-    <div>
-        <span class="demo-pill">Hackathon demo · v0.1</span>
-        <div class="page-kicker view-kicker-results">⚖ ASSESSMENT REPORT</div>
-    </div>
-    """,
+    '<div class="disclaimer-bar"><strong>Decision-support tool only — not legal advice.</strong> '
+    "Outputs are preliminary and require review by qualified counsel.</div>",
     unsafe_allow_html=True,
 )
-st.title("Preliminary EU AI Act Assessment")
-st.markdown(_case_context_html(), unsafe_allow_html=True)
+
+_render_session_actions(session_id, location="main")
 
 presented = result.get("presented", {})
 sections = presented.get("sections", {})
 warnings = presented.get("warnings", [])
 meta = presented.get("_meta", {})
+pipe_meta = result.get("_meta", {})
 critic = result.get("critic", {})
 pa_section = sections.get("preliminary_assessment", {})
+facts_section = sections.get("extracted_facts", {})
 
-
-# Overview cards
 ai_label = pa_section.get("ai_system", {}).get("label", "—")
 risk_label = pa_section.get("risk_tier", {}).get("label", "—")
 conf_val = pa_section.get("confidence", {}).get("value", "—")
 critic_pass = critic.get("pass")
 critic_label = "Pass" if critic_pass else "Revise" if critic_pass is False else "—"
-critic_tone = "tone-success" if critic_pass else "tone-warning" if critic_pass is False else "tone-info"
-
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.markdown(_overview_card("AI system", ai_label, "tone-info"), unsafe_allow_html=True)
-with c2:
-    st.markdown(_overview_card("Risk tier", risk_label, _risk_tone(risk_label)), unsafe_allow_html=True)
-with c3:
-    st.markdown(_overview_card("Confidence", conf_val, _confidence_tone(conf_val)), unsafe_allow_html=True)
-with c4:
-    st.markdown(_overview_card("Critic verdict", critic_label, critic_tone), unsafe_allow_html=True)
-
-if meta.get("revision_triggered"):
-    st.caption("Critic flagged the first draft — assessment was revised once.")
-
-for w in warnings:
-    sev = w.get("severity", "low")
-    msg = w.get("message", "")
-    if sev == "high":
-        st.error(msg)
-    elif sev == "medium":
-        st.warning(msg)
-    else:
-        st.info(msg)
+revision_triggered = bool(meta.get("revision_triggered") or pipe_meta.get("revision_triggered"))
+status_label = f"Draft · {'v2' if revision_triggered else 'v1'}"
+legal_count = len(pa_section.get("legal_citations_resolved") or pa_section.get("legal_citations") or [])
 
 summary = sections.get("use_case_summary", {})
-st.markdown(f'<h3 class="section-heading">{_esc(summary.get("title", "Use-case summary"))}</h3>', unsafe_allow_html=True)
-st.write(summary.get("body", ""))
+summary_body = (summary.get("body") or "").strip()
+report_title = _display_title(st.session_state.get("session_metadata") or {})
+risk_explanation = _clean_display_text(pa_section.get("reasoning") or "")
 
-(
-    tab_facts,
-    tab_assess,
-    tab_gov,
-    tab_missing,
-    tab_cites,
-    tab_trace,
-) = st.tabs([
-    "Extracted facts",
-    "Preliminary assessment",
-    "Governance",
-    "Missing info",
-    "Citations",
-    "Agent trace",
-])
+sector_hint = (st.session_state.get("session_metadata") or {}).get("sector_hint") or ""
+meta_line = " · ".join(
+    p for p in [
+        sector_hint.upper() if sector_hint else "",
+        f"CASE {session_id.upper()}",
+    ] if p
+)
 
+main_col, side_col = st.columns([72, 28], gap="large")
 
-with tab_facts:
-    facts = sections.get("extracted_facts", {}).get("facts", [])
-    if not facts:
-        st.caption("No facts extracted.")
-    else:
-        for f in facts:
-            evidence = (
-                "; ".join(
-                    r.get("source") or r.get("source_label") or r.get("chunk_id", "?")
-                    for r in (f.get("evidence_resolved") or [])
-                )
-                if f.get("evidence_resolved")
-                else "—"
-            )
-            st.markdown(
-                f"""
-                <div class="fact-row">
-                    <strong>{_esc(f['label'])}</strong>
-                    <div style="margin:0.35rem 0;color:#e2e8f0">{_esc(f['value'])}</div>
-                    <div style="font-size:0.78rem;color:var(--text-muted)">
-                        {_confidence_badge(f['confidence'])} · evidence: {_esc(evidence)}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-
-with tab_assess:
-    pa = sections.get("preliminary_assessment", {})
-    if not pa:
-        st.caption("No assessment produced.")
-    else:
-        if pa["ai_system"].get("reasoning"):
-            st.markdown("**Why this is an AI system**")
-            st.write(pa["ai_system"]["reasoning"])
-        st.markdown("**Reasoning**")
-        st.write(pa.get("reasoning", ""))
-        st.markdown("**Legal citations**")
-        resolved_cites = pa.get("legal_citations_resolved") or []
-        if resolved_cites:
-            for r in resolved_cites:
-                _render_citation_card(
-                    {
-                        "claim": "Legal basis for preliminary assessment",
-                        "source": r.get("source") or r.get("source_label"),
-                        "evidence_type": r.get("evidence_type"),
-                        "excerpt": r.get("excerpt"),
-                        "relevance_explanation": r.get("relevance_explanation"),
-                    },
-                )
-        else:
-            st.caption("No legal citations attached.")
-
-
-with tab_gov:
-    items = sections.get("governance_observations", {}).get("items", [])
-    if not items:
-        st.caption("No governance observations.")
-    else:
-        for item in items:
-            with st.container(border=True):
-                st.markdown(f"**{item['area_label']}**")
-                st.write(item["observation"])
-                resolved = item.get("citations_resolved") or []
-                if resolved:
-                    labels = [
-                        r.get("source") or r.get("source_label") or r.get("chunk_id", "?")
-                        for r in resolved
-                    ]
-                    st.caption("cites: " + " · ".join(labels))
-
-
-with tab_missing:
-    miss_section = sections.get("missing_information", {})
-    missing = miss_section.get("missing", [])
-    follow_ups = miss_section.get("follow_up_questions", [])
-
-    st.markdown("**Identified gaps**")
-    if missing:
-        for m in missing:
-            with st.container(border=True):
-                st.markdown(f"**{m['topic']}**")
-                if m["why_it_matters"]:
-                    st.caption(m["why_it_matters"])
-                if m["suggested_question"]:
-                    st.write(f"_Suggested question:_ {m['suggested_question']}")
-    else:
-        st.caption("No gaps flagged.")
-
-    st.markdown("**Follow-up questions to ask**")
-    if follow_ups:
-        for q in follow_ups:
-            st.write(f"- {q}")
-    else:
-        st.caption("No follow-ups suggested.")
-
-    st.info(
-        "Use the **Refine the assessment** panel in the sidebar to answer these "
-        "questions and re-run the analysis.",
-        icon="💬",
+with main_col:
+    _render_risk_hero(
+        risk_label=risk_label,
+        conf_val=conf_val,
+        critic_label=critic_label,
+        revision_triggered=revision_triggered,
+        explanation=risk_explanation,
     )
-
-
-with tab_cites:
-    cit = sections.get("citations", {})
-    primary = cit.get("citation_cards") or cit.get("claims_table") or []
-    additional = cit.get("additional_evidence") or []
-    inference = cit.get("system_inference") or {}
-
-    st.markdown("**System inference (conclusions, not direct quotes)**")
-    st.caption(inference.get("note", ""))
-    if inference.get("ai_system_reasoning"):
-        st.markdown("**AI system conclusion**")
-        st.write(inference["ai_system_reasoning"])
-    if inference.get("risk_reasoning"):
-        st.markdown("**Risk classification conclusion**")
-        st.write(inference["risk_reasoning"])
-
-    st.divider()
-    st.markdown("**Supported facts and regulatory references**")
-    if primary:
-        for row in primary:
-            _render_citation_card(row)
-    else:
-        st.caption("No strong primary citations for this assessment.")
-
-    if additional:
-        with st.expander(f"Additional retrieved evidence ({len(additional)} weaker matches)", expanded=False):
-            for row in additional:
-                _render_citation_card(row)
-
-    with st.expander("Advanced / debug — raw chunk IDs", expanded=False):
-        debug_rows = [
-            {
-                "chunk_id": row.get("chunk_id", ""),
-                "relevance_score": row.get("relevance_score"),
-                "display_tier": row.get("display_tier"),
-                "resolver": (row.get("_resolved") or {}).get("resolver", ""),
-            }
-            for row in primary + additional
-        ]
-        if debug_rows:
-            st.dataframe(debug_rows, use_container_width=True, hide_index=True)
-        else:
-            st.caption("No chunk IDs to show.")
-
-
-with tab_trace:
-    st.caption("Assessment → Critic → (optional revision) → Presenter")
-    history = result.get("history", [])
-    for h in history:
-        stage = h["stage"]
-        out = h["output"]
-        summary_line = ""
-        if stage.startswith("assessment"):
-            pa_out = out.get("preliminary_assessment", {})
-            summary_line = (
-                f"risk_tier={pa_out.get('risk_tier')} · "
-                f"confidence={pa_out.get('confidence')}"
-            )
-        elif stage.startswith("critic"):
-            summary_line = (
-                f"pass={out.get('pass')} · issues={len(out.get('issues', []))}"
-            )
-        elif stage == "presenter":
-            summary_line = f"warnings={len(out.get('warnings', []))}"
-
+    st.markdown(
+        f'<span style="color:#61736b;font-size:0.72rem;letter-spacing:0.04em;">{_esc(meta_line)}</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(f"## {_esc(report_title)}")
+    if summary_body:
         st.markdown(
-            f'<div class="trace-stage"><strong>{_esc(stage)}</strong> — {_esc(summary_line)}</div>',
+            f'<p style="color:#102a24;font-size:0.95rem;">{_esc(_truncate(summary_body, 320))}</p>',
             unsafe_allow_html=True,
         )
-        with st.expander(f"View {stage} output", expanded=False):
-            st.json(out, expanded=False)
 
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Risk tier", risk_label)
+    m2.metric("Legal triggers", str(legal_count))
+    m3.metric("Confidence", conf_val)
+    m4.metric("Status", f"{critic_label} · {status_label}")
+
+    tab_overview, tab_assessment, tab_governance, tab_facts, tab_missing, tab_citations, tab_trace = st.tabs(
+        [
+            "Overview",
+            "Assessment",
+            "Governance",
+            "Facts",
+            "Missing info",
+            "Citations",
+            "Trace",
+        ]
+    )
+
+    with tab_overview:
+        _render_tab_overview(
+            summary_body=summary_body,
+            ai_label=ai_label,
+            risk_label=risk_label,
+            conf_val=conf_val,
+            risk_explanation=risk_explanation,
+            warnings=warnings,
+            sections=sections,
+        )
+
+    with tab_assessment:
+        _render_tab_assessment(pa_section, ai_label, risk_label, conf_val)
+
+    with tab_governance:
+        _render_tab_governance(sections)
+
+    with tab_facts:
+        _render_tab_facts(facts_section)
+
+    with tab_missing:
+        _render_tab_missing(session_id, sections)
+
+    with tab_citations:
+        _render_tab_citations(sections)
+
+    with tab_trace:
+        _render_tab_trace(result, revision_triggered)
+
+with side_col:
+    _render_context_panel_dark(
+        session_id=session_id,
+        session_metadata=st.session_state.get("session_metadata") or {},
+        processed_docs=st.session_state.get("processed_docs") or [],
+        facts_section=facts_section,
+    )
+    st.markdown(
+        '<p style="font-size:0.72rem;font-weight:600;color:#61736b;letter-spacing:0.05em;'
+        'text-transform:uppercase;margin:0.85rem 0 0.45rem;">Quick actions</p>',
+        unsafe_allow_html=True,
+    )
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        if st.button("New case", use_container_width=True, key="side_new_case"):
+            _reset_session()
+            st.rerun()
+    with sc2:
+        can_reassess = bool(st.session_state.get("chunks")) and not st.session_state.get("is_running")
+        if st.button(
+            "Reassess",
+            type="primary",
+            use_container_width=True,
+            disabled=not can_reassess,
+            key="side_reassess",
+        ):
+            _rerun_assessment(session_id)
+            st.rerun()
+    _render_agent_timeline(result.get("history", []), revision_triggered, compact=True)
 
 st.divider()
 st.caption(presented.get("disclaimer", ""))
