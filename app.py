@@ -50,6 +50,28 @@ def _confidence_badge(confidence: str) -> str:
     return f"{icon} {confidence}"
 
 
+def _render_citation_card(card: dict, *, show_claim: bool = True) -> None:
+    """Render one human-readable citation card."""
+    with st.container(border=True):
+        category = card.get("evidence_category_label") or card.get("evidence_category")
+        if category:
+            st.caption(category)
+
+        if show_claim and card.get("claim"):
+            st.markdown(f"**Claim:** {card['claim']}")
+        st.markdown(f"**Source:** {card.get('source') or card.get('source_label') or '—'}")
+
+        excerpt = (card.get("excerpt") or "").strip()
+        if excerpt:
+            st.markdown(f"**Evidence excerpt:** \"{excerpt}\"")
+        else:
+            st.caption("Evidence excerpt: not available for this chunk.")
+
+        explanation = (card.get("relevance_explanation") or "").strip()
+        if explanation:
+            st.markdown(f"**Why this supports the claim:** {explanation}")
+
+
 # ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
@@ -275,7 +297,15 @@ with tab_facts:
             cols[1].write(f["value"])
             cols[2].markdown(_confidence_badge(f["confidence"]))
             cols[3].caption(
-                f"evidence: {', '.join(f['evidence']) if f['evidence'] else '—'}"
+                "evidence: "
+                + (
+                    "; ".join(
+                        r.get("source") or r.get("source_label") or r.get("chunk_id", "?")
+                        for r in (f.get("evidence_resolved") or [])
+                    )
+                    if f.get("evidence_resolved")
+                    else "—"
+                )
             )
 
 
@@ -319,10 +349,17 @@ with tab_assess:
         st.write(pa.get("reasoning", ""))
 
         st.markdown("**Legal citations**")
-        cites = pa.get("legal_citations", [])
-        if cites:
-            for c in cites:
-                st.code(c, language="text")
+        resolved_cites = pa.get("legal_citations_resolved") or []
+        if resolved_cites:
+            for r in resolved_cites:
+                _render_citation_card(
+                    {
+                        "claim": "Legal basis for preliminary assessment",
+                        "source": r.get("source") or r.get("source_label"),
+                        "excerpt": r.get("excerpt"),
+                    },
+                    show_claim=True,
+                )
         else:
             st.caption("No legal citations attached.")
 
@@ -338,8 +375,13 @@ with tab_gov:
             with st.container(border=True):
                 st.markdown(f"**{item['area_label']}**")
                 st.write(item["observation"])
-                if item["citations"]:
-                    st.caption("cites: " + ", ".join(item["citations"]))
+                resolved = item.get("citations_resolved") or []
+                if resolved:
+                    labels = [
+                        r.get("source") or r.get("source_label") or r.get("chunk_id", "?")
+                        for r in resolved
+                    ]
+                    st.caption("cites: " + " · ".join(labels))
 
 
 # ---- Missing info + follow-up ----------------------------------------------
@@ -412,25 +454,90 @@ with tab_missing:
 
 with tab_cites:
     cit = sections.get("citations", {})
-    col_u, col_c = st.columns(2)
+    primary = cit.get("citation_cards") or cit.get("claims_table") or []
+    additional = cit.get("additional_evidence") or []
+    inference = cit.get("system_inference") or {}
 
+    st.markdown("**System inference (conclusions, not direct quotes)**")
+    st.caption(inference.get("note", ""))
+    if inference.get("ai_system_reasoning"):
+        st.markdown("**AI system conclusion**")
+        st.write(inference["ai_system_reasoning"])
+    if inference.get("risk_reasoning"):
+        st.markdown("**Risk classification conclusion**")
+        st.write(inference["risk_reasoning"])
+    if not inference.get("ai_system_reasoning") and not inference.get("risk_reasoning"):
+        st.write(inference.get("summary", "No inference summary available."))
+
+    st.divider()
+    st.markdown("**Supported facts and regulatory references**")
+    if primary:
+        st.dataframe(
+            [
+                {
+                    "Claim": row.get("claim", ""),
+                    "Category": row.get("evidence_category_label", ""),
+                    "Source": row.get("source", ""),
+                    "Excerpt": row.get("excerpt", ""),
+                }
+                for row in primary
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown("**Citation cards**")
+        for row in primary:
+            _render_citation_card(row)
+    else:
+        st.caption("No strong primary citations for this assessment.")
+
+    if additional:
+        st.divider()
+        with st.expander(f"Additional retrieved evidence ({len(additional)} weaker matches)", expanded=False):
+            st.caption(
+                "These sources were retrieved or cited but have weaker alignment with the claim. "
+                "Use for context, not as primary proof."
+            )
+            for row in additional:
+                _render_citation_card(row)
+
+    st.divider()
+    st.markdown("**All sources used**")
+    col_u, col_c = st.columns(2)
     with col_u:
-        st.markdown("**Uploaded evidence**")
-        items = cit.get("uploaded_evidence", [])
-        if items:
-            for c in items:
-                st.code(c["chunk_id"], language="text")
-        else:
+        st.markdown("_Uploaded documents_")
+        for r in cit.get("uploaded_evidence", []):
+            st.write(f"- {r.get('source') or r.get('source_label')}")
+            if r.get("excerpt"):
+                st.caption(f"\"{r['excerpt']}\"")
+        if not cit.get("uploaded_evidence"):
             st.caption("None cited.")
 
     with col_c:
-        st.markdown("**Corpus citations (EU AI Act)**")
-        items = cit.get("corpus_citations", [])
-        if items:
-            for c in items:
-                st.code(c["chunk_id"], language="text")
-        else:
+        st.markdown("_EU AI Act references_")
+        for r in cit.get("corpus_citations", []):
+            st.write(f"- {r.get('source') or r.get('source_label')}")
+            if r.get("excerpt"):
+                st.caption(f"\"{r['excerpt']}\"")
+        if not cit.get("corpus_citations"):
             st.caption("None cited.")
+
+    st.divider()
+    with st.expander("Advanced / debug - raw chunk IDs", expanded=False):
+        debug_rows = [
+            {
+                "chunk_id": row.get("chunk_id", ""),
+                "relevance_score": row.get("relevance_score"),
+                "display_tier": row.get("display_tier"),
+                "resolver": (row.get("_resolved") or {}).get("resolver", ""),
+            }
+            for row in primary + additional
+        ]
+        if debug_rows:
+            st.dataframe(debug_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No chunk IDs to show.")
 
 
 # ---- Pipeline history (multi-agent transparency) --------------------------

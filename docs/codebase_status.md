@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23 (core audit fixes + demo trigger tests added)
+**Last updated:** 2026-05-23 (core audit fixes + readable citation cards)
 
 ---
 
@@ -45,8 +45,10 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | `chunking.py` | Paragraph/sentence-aware chunker with metadata + overlap | `chunk_text`, `chunk_document` |
 | `vector_store.py` | Chroma client + collections (`uploaded_docs_collection`, `ai_act_corpus_collection`) + corpus loader | `add_chunks_to_uploaded`, `load_corpus_to_chroma`, `get_uploaded_collection`, `get_corpus_collection`, `delete_session_chunks` |
 | `retrieval.py` | RAG layer: expanded standard queries for Article 3, Article 5, Annex III, Article 50, GPAI, role clarity, governance; dedup, source tags, capped combined context | `retrieve_uploaded_context`, `retrieve_ai_act_context`, `retrieve_combined_context`, `STANDARD_QUERIES` |
+| `citation_resolver.py` | Resolves cited `chunk_id` values into human-readable citation cards using Chroma lookup, pipeline evidence cache, and chunk-ID fallbacks | `resolve_citations`, `resolve_citation`, `format_source_label` |
+| `citation_relevance.py` | Scores claim-to-excerpt alignment, labels citation categories, and separates primary citations from weaker contextual evidence | `enrich_citation_row`, `build_system_inference` |
 | `llm.py` | LLM provider abstraction (DeepSeek / OpenAI / Anthropic) + mock-mode switch | `call_llm`, `is_mock_mode` |
-| `pipeline.py` | Multi-agent orchestrator: retrieve once → Assessment → Critic → (revise once if fail) → Presenter, with evidence context forwarded for source-aware citations | `run_assessment_pipeline` |
+| `pipeline.py` | Multi-agent orchestrator: retrieve once → Assessment → Critic → (revise once if fail) → resolve cited chunks → Presenter | `run_assessment_pipeline` |
 
 ### Agents (`src/agents/`)
 
@@ -54,7 +56,7 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 |---|---|---|
 | `assessment_agent.py` | Produce a structured first-pass EU AI Act assessment from retrieved evidence | Hybrid ReAct: accepts pre-retrieved baseline evidence, can request extra evidence, includes Article 3 definition notes, definition exclusion, prohibited subtype, high-risk domain, transparency/GPAI notes |
 | `critic_agent.py` | Quality gate; decide pass/fail and emit revision instruction | Single structured LLM call, no retrieval, 8-point checklist + mock-mode citation ID validation against retrieved evidence |
-| `presenter_agent.py` | Format the reviewed assessment into 6 display-ready dashboard sections + warnings + disclaimer | Pure programmatic formatter; uses pipeline evidence context for source-aware citation separation |
+| `presenter_agent.py` | Format the reviewed assessment into 6 display-ready dashboard sections + warnings + disclaimer | Pure programmatic formatter; uses resolved citation cards for source-aware evidence display |
 
 ### Built-in corpus (`corpus/`)
 
@@ -121,7 +123,8 @@ run_assessment_pipeline(session_id)
    ├── critic_agent               → verdict_v1
    ├── (if fail) assessment_agent(baseline evidence) → assessment_v2  (revision)
    ├── (if fail) critic_agent     → verdict_v2
-   └── presenter_agent(evidence context) → display-ready sections + warnings
+   ├── resolve_citations(all cited chunk IDs + evidence cache)
+   └── presenter_agent(chunk_lookup) → display-ready sections + citation cards + warnings
    ↓
 { assessment, critic, presented, evidence_context, history[], _meta }
 ```
