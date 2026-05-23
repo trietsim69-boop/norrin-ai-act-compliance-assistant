@@ -1,6 +1,6 @@
 # Norrin AI Act Compliance Assistant
 
-Multi-agent **EU AI Act** compliance assistant for the Norrin hackathon challenge. Upload use-case documents (or describe a system manually), run a structured assessment, and review a preliminary report with extracted facts, risk classification, governance notes, citations, and follow-up questions.
+Multi-agent **EU AI Act** compliance console for the Norrin hackathon challenge. Upload use-case documents (or describe a system manually), run a structured assessment, and review a preliminary report with extracted facts, risk classification, governance notes, citations, and follow-up questions.
 
 **Not legal advice.** Outputs are for structured human review only.
 
@@ -8,10 +8,11 @@ Multi-agent **EU AI Act** compliance assistant for the Norrin hackathon challeng
 
 ## Features
 
-- **Document intake** — PDF, DOCX, PPTX, HTML, CSV, TXT, MD via MarkItDown, plus optional manual description
+- **Document intake** — PDF, DOCX, PPTX, HTML, CSV, TXT, MD via MarkItDown, or a manual use-case description (no upload required)
 - **RAG over official corpus** — EU AI Act regulation + Commission guidelines (~1,874 indexed chunks after one-shot load)
-- **Multi-agent pipeline** — Assessment (ReAct) → Critic (quality gate) → optional one revision → Presenter (formatter)
-- **Streamlit dashboard** — dark theme, intake vs. results views, sidebar follow-up, six report tabs + agent trace
+- **Multi-agent pipeline** — Assessment (ReAct) → Critic (quality gate) → optional one revision → Citation resolver → Presenter (formatter)
+- **Streamlit regulatory console** — cream/light theme, top navigation (Assessment Console · Regulatory Library · Audit Logs), tabbed results, sidebar metadata, New case / Reassess workflow
+- **Citation layer** — Human-readable source labels, relevance scoring, primary vs additional evidence, system-inference separation
 - **Mock mode** — full offline demo with fixture responses keyed to document keywords
 - **Demo cases + trigger tests** — five evaluation paths with expected outcomes in `tests/expected_triggers.json`
 
@@ -79,34 +80,51 @@ Defaults to `MOCK_LLM=true`. Expect **5/5** passes in mock mode when the corpus 
 ## Project layout
 
 ```text
-app.py                    Streamlit entry point
-corpus/                   Official EU AI Act + Commission PDFs/HTML
-demo_cases/               Sample documents per evaluation path
-docs/                     MVP plan + living codebase status
+app.py                      Streamlit entry point (UI + session orchestration)
+.streamlit/config.toml      Light theme (cream background, dark text)
+corpus/                     Official EU AI Act HTML + Commission guideline PDFs
+demo_cases/                 Sample documents per evaluation path
+docs/
+  mvp_plan.md               Original architecture plan
+  codebase_status.md        Living build + UI status (update on major changes)
 scripts/
-  load_corpus.py          One-shot corpus indexer
-  run_trigger_tests.py    Demo-case evaluation harness
+  load_corpus.py            One-shot corpus indexer
+  run_trigger_tests.py      Demo-case evaluation harness
 src/
-  config.py               Paths, env, model settings
-  preprocessing.py        MarkItDown conversion
-  chunking.py             Chunking with overlap
-  vector_store.py         Chroma collections + corpus loader
-  corpus_metadata.py      Law-layer/topic metadata on corpus chunks
-  retrieval.py            RAG queries (8 standard + targeted corpus pulls)
-  citation_resolver.py    chunk_id → citation cards
+  config.py                 Paths, env, model settings
+  preprocessing.py          MarkItDown conversion
+  chunking.py                 Chunking with overlap
+  vector_store.py           Chroma collections + corpus loader
+  corpus_metadata.py        Law-layer/topic metadata on corpus chunks
+  retrieval.py              RAG queries (8 standard + targeted corpus pulls)
+  citation_resolver.py      chunk_id → citation cards
   citation_relevance.py     Relevance scoring + system-inference separation
-  llm.py                  Provider abstraction + mock mode
-  pipeline.py             Assessment → Critic → Presenter orchestration
-  evaluation.py           Trigger-test runner helpers
+  llm.py                    Provider abstraction + mock mode
+  pipeline.py               Assessment → Critic → Presenter orchestration
+  evaluation.py             Trigger-test runner helpers
   agents/
-    assessment_agent.py   Hybrid ReAct, structured JSON
-    critic_agent.py       Pass/fail + revision instruction
-    presenter_agent.py    Dashboard formatter (no LLM)
+    assessment_agent.py     Hybrid ReAct, structured JSON
+    critic_agent.py         Pass/fail + revision instruction
+    presenter_agent.py      Dashboard formatter (no LLM)
 tests/expected_triggers.json
-data/                     Runtime uploads, vector store (git-ignored)
+data/                       Runtime uploads, vector store (git-ignored)
 ```
 
 See [`docs/codebase_status.md`](docs/codebase_status.md) for detailed build status and [`AGENTS.md`](AGENTS.md) for contributor conventions.
+
+---
+
+## Streamlit UI (summary)
+
+| Area | What it does |
+|---|---|
+| **Top nav** | Switch Assessment Console / Regulatory Library / Audit Logs; Export Brief on results |
+| **Sidebar** | Case metadata (name, sector, role, deployment, region, GPAI notes); New case; Reassess |
+| **Intake** | Two cards: upload documents · describe use case manually; Run assessment |
+| **Results** | Risk hero, summary metrics, 72/30 layout with **7 tabs** + right-side System Context & agent timeline |
+| **Tabs** | Overview · Assessment · Governance · Facts · Missing info · Citations · Trace |
+
+Full UI notes: [`docs/codebase_status.md`](docs/codebase_status.md) §4.
 
 ---
 

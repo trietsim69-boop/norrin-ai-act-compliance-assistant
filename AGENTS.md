@@ -72,15 +72,16 @@ If you are an AI coding assistant editing this repository, follow these rules.
 
 ```text
 norrin-ai-act-compliance-assistant/
-├── app.py                         Streamlit entry point (intake + results views)
+├── app.py                         Streamlit regulatory console (UI + session orchestration)
+├── .streamlit/config.toml         light theme (cream bg, dark text)
 ├── requirements.txt
 ├── .env.example                   template; never commit a real .env
 ├── AGENTS.md                      this file
 ├── README.md                      quick start + layout
-├── corpus/                        official EU AI Act + Commission guidelines
+├── corpus/                        official EU AI Act HTML + Commission guideline PDFs
 ├── demo_cases/                    sample documents per evaluation path
 ├── docs/
-│   ├── mvp_plan.md                master architecture plan
+│   ├── mvp_plan.md                master architecture plan (+ implementation notes)
 │   └── codebase_status.md         living status (UPDATE on major changes)
 ├── scripts/
 │   ├── load_corpus.py             one-shot corpus loader
@@ -116,6 +117,8 @@ norrin-ai-act-compliance-assistant/
 | Run trigger tests with live LLM | `python -m scripts.run_trigger_tests --real-llm` |
 | Run Streamlit UI | `streamlit run app.py --server.port 8521` |
 | Run Streamlit (less dev watcher overhead) | `streamlit run app.py --server.port 8521 --server.fileWatcherType none` |
+
+**UI changes** belong in `app.py` only unless adding shared helpers — see [`docs/codebase_status.md`](./docs/codebase_status.md) §4 for the current console layout (tabs, nav pages, sidebar).
 
 ### Environment
 

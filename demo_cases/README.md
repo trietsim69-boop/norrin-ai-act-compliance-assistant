@@ -29,6 +29,8 @@ Expected outcomes: [`tests/expected_triggers.json`](../tests/expected_triggers.j
 1. Start the app: `streamlit run app.py --server.port 8521`
 2. Upload all files from one demo folder **or** paste a manual description with similar keywords
 3. Click **Run assessment**
-4. Optional: fill in sidebar **About this case** metadata (case name, sector, role)
+4. Optional: fill in sidebar **Case metadata** (use-case name, sector, org role, deployment context, region, GPAI notes)
 
-Use **New assessment** in the sidebar to reset and try another demo path.
+After a run, use **New case** (clears session) or **Reassess** (same files/metadata, re-runs pipeline) from the results bar, sidebar, or right-column quick actions.
+
+Use **Regulatory Library** in the top nav to confirm the corpus is loaded (1,874 chunks). Use **Audit Logs** to inspect pipeline stages for the current session.

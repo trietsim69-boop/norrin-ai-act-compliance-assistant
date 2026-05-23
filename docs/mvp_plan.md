@@ -1,6 +1,6 @@
 # Norrin AI Act Assistant — Simple MVP Structure
 
-> **Implementation status (2026-05-23):** MVP steps 1–12 are complete. For the live file list, UI behaviour, and run commands, see [`codebase_status.md`](./codebase_status.md) and [`README.md`](../README.md). This document remains the original architecture plan.
+> **Implementation status (2026-05-23):** MVP steps 1–12 are complete. For the live file list, UI behaviour, and run commands, see [`codebase_status.md`](./codebase_status.md) and [`README.md`](../README.md). This document remains the original architecture plan; sections below note where the built system differs (e.g. full EUR-Lex corpus files instead of simplified `.md` stubs, citation resolver layer, tabbed Streamlit console).
 
 ## 1. General Idea
 
@@ -111,6 +111,69 @@ Output
 
 ## 4. Folder Structure
 
+**As built (2026-05-23):**
+
+```text
+norrin-ai-act-compliance-assistant/
+│
+├── app.py                          Streamlit regulatory console (all UI)
+├── .streamlit/config.toml          light theme overrides
+├── requirements.txt
+├── README.md
+├── AGENTS.md
+├── .env.example
+│
+├── data/                           runtime (git-ignored)
+│   ├── uploaded/{session_id}/
+│   ├── converted_markdown/{session_id}/
+│   ├── converted_markdown/_corpus/
+│   ├── vector_store/
+│   └── outputs/
+│
+├── corpus/
+│   ├── EU_AI_Act.html
+│   ├── Commission_Guidelines_on_the_definition_of_an_*.PDF
+│   └── Guidelines_on_prohibited_artificial_intelligence_*.PDF
+│
+├── src/
+│   ├── config.py
+│   ├── preprocessing.py
+│   ├── chunking.py
+│   ├── vector_store.py
+│   ├── corpus_metadata.py
+│   ├── retrieval.py
+│   ├── citation_resolver.py
+│   ├── citation_relevance.py
+│   ├── llm.py
+│   ├── pipeline.py
+│   ├── evaluation.py
+│   └── agents/
+│       ├── assessment_agent.py
+│       ├── critic_agent.py
+│       └── presenter_agent.py
+│
+├── scripts/
+│   ├── load_corpus.py
+│   └── run_trigger_tests.py
+│
+├── demo_cases/
+│   ├── hr_screening/
+│   ├── customer_chatbot/
+│   ├── spam_filter/
+│   ├── workplace_emotion_detection/
+│   └── llm_report_generator/
+│
+├── docs/
+│   ├── mvp_plan.md
+│   └── codebase_status.md
+│
+└── tests/
+    └── expected_triggers.json
+```
+
+<details>
+<summary>Original MVP sketch (superseded — kept for history)</summary>
+
 ```text
 norrin-ai-act-assistant/
 │
@@ -138,22 +201,16 @@ norrin-ai-act-assistant/
 │   ├── retrieval.py
 │   ├── schemas.py
 │   ├── evaluation.py
-│   │
 │   └── agents/
 │       ├── assessment_agent.py
 │       ├── critic_agent.py
 │       └── presenter_agent.py
 │
-├── demo_cases/
-│   ├── hr_screening/
-│   ├── customer_chatbot/
-│   ├── spam_filter/
-│   ├── workplace_emotion_detection/
-│   └── llm_report_generator/
-│
-└── tests/
-    └── expected_triggers.json
+├── demo_cases/ …
+└── tests/expected_triggers.json
 ```
+
+</details>
 
 ---
 
@@ -161,20 +218,21 @@ norrin-ai-act-assistant/
 
 ### `app.py`
 
-Main Streamlit app.
+Main Streamlit regulatory console. **All UI logic lives in this file** (theme CSS, layout, render helpers); backend calls go through `src.pipeline` and related modules.
 
-It should include:
+**Implemented (2026-05-23):**
 
-- title
-- short product explanation
-- not-legal-advice disclaimer
-- file uploader
-- optional metadata form
-- analyze button
-- result dashboard
-- follow-up question box
+- Top nav: Assessment Console · Regulatory Library · Audit Logs (`active_page`)
+- Disclaimer bar (not legal advice)
+- **Intake:** upload card + manual use-case description card; Run assessment with progress
+- **Sidebar:** case metadata form; New case; Reassess
+- **Results:** risk hero, summary metrics, session actions, 72/28 layout
+- **Tabs:** Overview · Assessment · Governance · Facts · Missing info · Citations · Trace
+- **Right column:** System Context (read-only), agent pipeline timeline, quick actions
+- Follow-up in Missing info tab; Export Brief (JSON) in top nav
+- Citation cards via `format_source_label()`; chunk IDs in debug expanders only
 
-Session state is managed with `st.session_state`. A `session_id` (e.g. a UUID generated at session start) is stored in `st.session_state["session_id"]` and passed to all pipeline functions so uploaded document chunks are namespaced correctly in Chroma.
+Session state uses `st.session_state`. A `session_id` (UUID) namespaces uploaded chunks in Chroma. Key keys: `session_id`, `pipeline_result`, `session_metadata`, `app_view` (`intake` | `results`), `active_page`.
 
 ---
 
@@ -424,6 +482,21 @@ Formats the final reviewed result into a clean dashboard/report.
 
 ## 6. Built-in Corpus Structure
 
+**As built:** The repo ships the **full official sources** in `corpus/` (not simplified Markdown stubs):
+
+| File | Role |
+|---|---|
+| `EU_AI_Act.html` | EUR-Lex regulation text |
+| `Commission_Guidelines_on_the_definition_of_an_*.PDF` | Art. 3 AI system definition guidance |
+| `Guidelines_on_prohibited_artificial_intelligence_*.PDF` | Art. 5 prohibited practices guidance |
+
+`scripts/load_corpus.py` converts, chunks, enriches metadata via `corpus_metadata.py`, and loads **~1,874 chunks** into `ai_act_corpus_collection`.
+
+Label every corpus chunk with `source_type: regulation` or `source_type: official_guidance` to support evidence separation in the output.
+
+<details>
+<summary>Original MVP sketch (curated markdown stubs — not used)</summary>
+
 In `corpus/ai_act_core.md`, include a simplified curated version of:
 
 - AI system definition (Article 3)
@@ -433,17 +506,9 @@ In `corpus/ai_act_core.md`, include a simplified curated version of:
 - Transparency obligations (Article 50)
 - GPAI obligations (Chapter V)
 
-In `corpus/ai_system_definition_guidance.md`:
+Separate stub files for Commission definition and prohibited-practices guidelines were planned instead of full PDFs/HTML.
 
-- Commission guidelines on AI system definition
-
-In `corpus/prohibited_practices_guidance.md`:
-
-- Commission guidelines on prohibited AI practices
-
-For MVP, the corpus does not need to contain the full AI Act text. It needs enough to support all five demo cases: high-risk (employment), limited risk (chatbot), prohibited (emotion detection), minimal risk (spam filter), and GPAI (LLM report generator).
-
-Label every corpus chunk with `source_type: regulation` or `source_type: official_guidance` to support evidence separation in the output.
+</details>
 
 ---
 
@@ -480,12 +545,14 @@ Label every corpus chunk with `source_type: regulation` or `source_type: officia
 
 9. Assessment Agent revises if instructed
 
-10. Presenter Agent formats final dashboard from reviewed output
+10. Citation resolver maps chunk IDs → readable citation cards; relevance layer tiers primary vs additional evidence
 
-11. User reads dashboard; can answer missing-information questions
+11. Presenter Agent formats final dashboard from reviewed output (no LLM)
 
-12. If user provides new information:
-    - answer is appended to session context
+12. User reads tabbed dashboard; can answer missing-information questions or Reassess
+
+13. If user provides new information:
+    - answer is indexed as follow-up document chunks
     - Assessment → Critic → Presenter re-run with updated context
     - Updated dashboard is shown
 ```
@@ -648,23 +715,22 @@ This is more useful than ML-style accuracy because the system is not training a 
 ## 10. MVP Build Order
 
 ```text
-1.  Streamlit app shell (upload UI, disclaimer, analyze button, empty result sections)
-2.  MarkItDown file conversion (preprocessing.py)
-3.  Chunking function (chunking.py)
-4.  Chroma vector store setup (vector_store.py, config.py)
-5.  Built-in AI Act corpus: write corpus files → implement load_corpus_to_chroma()
-    → run once at startup to populate ai_act_corpus_collection
-6.  Retrieval functions (retrieval.py)
-7.  Assessment Agent with structured JSON output (assessment_agent.py)
-8.  Critic Agent with pass/fail loop (critic_agent.py)
-9.  Presenter Agent: format final sections, no new reasoning (presenter_agent.py)
-10. Dashboard display: summary, facts table, risk card, governance, missing questions, citations
-11. Follow-up input: user answers missing question → append to session context → rerun pipeline → show updated output
-12. Demo cases + trigger tests
+1.  Streamlit app shell (upload UI, disclaimer, analyze button, empty result sections)  ✓
+2.  MarkItDown file conversion (preprocessing.py)  ✓
+3.  Chunking function (chunking.py)  ✓
+4.  Chroma vector store setup (vector_store.py, config.py)  ✓
+5.  Built-in AI Act corpus → load_corpus_to_chroma()  ✓
+6.  Retrieval functions (retrieval.py)  ✓
+7.  Assessment Agent with structured JSON output (assessment_agent.py)  ✓
+8.  Critic Agent with pass/fail loop (critic_agent.py)  ✓
+9.  Presenter Agent: format final sections, no new reasoning (presenter_agent.py)  ✓
+10. Dashboard display: tabbed report, citations, agent trace (app.py)  ✓
+11. Follow-up input + Reassess workflow  ✓
+12. Demo cases + trigger tests  ✓
 ```
 
 Final one-line architecture:
 
 ```text
-MarkItDown → Markdown → chunks → embeddings → Chroma → retrieval → Assessment Agent → Critic Agent (→ revise once if needed) → Presenter Agent → dashboard
+MarkItDown → Markdown → chunks → embeddings → Chroma → retrieval → Assessment Agent → Critic Agent (→ revise once if needed) → Citation resolver → Presenter Agent → Streamlit console
 ```
