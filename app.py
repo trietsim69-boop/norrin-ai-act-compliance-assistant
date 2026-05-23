@@ -63,6 +63,7 @@ def _init_state() -> None:
         "session_metadata": {},
         "follow_up_answers": [],
         "is_running": False,
+        "clear_follow_up_input": False,
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
@@ -83,7 +84,8 @@ with st.sidebar:
     if st.button("Reset session", use_container_width=True):
         delete_session_chunks(session_id)
         for k in ("session_id", "processed_docs", "chunks", "pipeline_result",
-                  "session_metadata", "follow_up_answers", "is_running"):
+                  "session_metadata", "follow_up_answers", "is_running",
+                  "clear_follow_up_input", "follow_up_input"):
             st.session_state.pop(k, None)
         st.rerun()
 
@@ -293,6 +295,26 @@ with tab_assess:
             st.markdown("**Why this is an AI system**")
             st.write(pa["ai_system"]["reasoning"])
 
+        if pa["ai_system"].get("definition_notes"):
+            st.markdown("**AI system definition notes**")
+            st.write(pa["ai_system"]["definition_notes"])
+        if pa["ai_system"].get("definition_exclusion"):
+            st.caption(f"Definition exclusion considered: `{pa['ai_system']['definition_exclusion']}`")
+
+        risk_details = []
+        subtype = pa["risk_tier"].get("prohibited_practice_subtype")
+        high_risk_domain = pa["risk_tier"].get("high_risk_domain")
+        if subtype and subtype != "none":
+            risk_details.append(f"prohibited subtype: `{subtype}`")
+        if high_risk_domain and high_risk_domain != "none":
+            risk_details.append(f"high-risk domain: `{high_risk_domain}`")
+        if risk_details:
+            st.caption(" · ".join(risk_details))
+
+        if pa.get("transparency_or_gpai_notes"):
+            st.markdown("**Transparency / GPAI notes**")
+            st.write(pa["transparency_or_gpai_notes"])
+
         st.markdown("**Reasoning**")
         st.write(pa.get("reasoning", ""))
 
@@ -352,6 +374,8 @@ with tab_missing:
         "Add answers or new context here. Clicking *Apply* will append your input to "
         "the session and re-run the multi-agent pipeline."
     )
+    if st.session_state.pop("clear_follow_up_input", False):
+        st.session_state["follow_up_input"] = ""
     new_answer = st.text_area(
         "Additional context", key="follow_up_input", height=100,
         placeholder="e.g. 'A recruiter must explicitly approve every shortlisted candidate.'",
@@ -359,7 +383,7 @@ with tab_missing:
     if st.button("Apply and re-run"):
         if new_answer.strip():
             st.session_state["follow_up_answers"].append(new_answer.strip())
-            st.session_state["follow_up_input"] = ""
+            st.session_state["clear_follow_up_input"] = True
             sample_dir = Path("data") / "uploaded" / session_id
             sample_dir.mkdir(parents=True, exist_ok=True)
             follow_up_path = sample_dir / f"follow_up_{len(st.session_state['follow_up_answers'])}.md"

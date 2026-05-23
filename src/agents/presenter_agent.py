@@ -87,6 +87,7 @@ def presenter_agent(pipeline_result: dict) -> dict:
     assessment = pipeline_result.get("assessment") or {}
     critic = pipeline_result.get("critic") or {}
     meta_in = pipeline_result.get("_meta", {})
+    evidence_context = pipeline_result.get("evidence_context") or {}
 
     sections = {
         "use_case_summary":        _section_summary(assessment),
@@ -94,7 +95,7 @@ def presenter_agent(pipeline_result: dict) -> dict:
         "preliminary_assessment":  _section_assessment(assessment),
         "governance_observations": _section_governance(assessment),
         "missing_information":     _section_missing(assessment, critic),
-        "citations":               _section_citations(assessment),
+        "citations":               _section_citations(assessment, evidence_context),
     }
 
     warnings = _build_warnings(assessment, critic)
@@ -170,16 +171,21 @@ def _section_assessment(a: dict) -> dict:
             "label": ai_label,
             "color": ai_color,
             "reasoning": (pa.get("ai_system_reasoning") or "").strip(),
+            "definition_notes": (pa.get("ai_system_definition_notes") or "").strip(),
+            "definition_exclusion": (pa.get("definition_exclusion") or "unclear").strip(),
         },
         "risk_tier": {
             "value": risk_value,
             "label": risk_label,
             "color": risk_color,
+            "prohibited_practice_subtype": (pa.get("prohibited_practice_subtype") or "none").strip(),
+            "high_risk_domain": (pa.get("high_risk_domain") or "none").strip(),
         },
         "confidence": {
             "value": confidence,
             "color": CONFIDENCE_COLORS.get(confidence, "grey"),
         },
+        "transparency_or_gpai_notes": (pa.get("transparency_or_gpai_notes") or "").strip(),
         "reasoning": (pa.get("reasoning") or "").strip(),
         "legal_citations": list(pa.get("legal_citations") or []),
     }
@@ -227,22 +233,24 @@ def _section_missing(a: dict, critic: dict) -> dict:
     }
 
 
-def _section_citations(a: dict) -> dict:
+def _section_citations(a: dict, evidence_context: dict) -> dict:
     uploaded_ids: set[str] = set()
     corpus_ids: set[str] = set()
+    known_uploaded = set(evidence_context.get("uploaded_chunk_ids") or [])
+    known_corpus = set(evidence_context.get("corpus_chunk_ids") or [])
 
     pa = a.get("preliminary_assessment") or {}
     for cid in pa.get("legal_citations") or []:
-        _bucket(cid, uploaded_ids, corpus_ids)
+        _bucket(cid, uploaded_ids, corpus_ids, known_uploaded, known_corpus)
 
     for fact in (a.get("extracted_facts") or {}).values():
         if isinstance(fact, dict):
             for cid in fact.get("evidence") or []:
-                _bucket(cid, uploaded_ids, corpus_ids)
+                _bucket(cid, uploaded_ids, corpus_ids, known_uploaded, known_corpus)
 
     for obs in a.get("governance_observations") or []:
         for cid in obs.get("citations") or []:
-            _bucket(cid, uploaded_ids, corpus_ids)
+            _bucket(cid, uploaded_ids, corpus_ids, known_uploaded, known_corpus)
 
     return {
         "title": "Citations and evidence separation",
@@ -301,12 +309,24 @@ def _build_warnings(a: dict, critic: dict) -> list[dict]:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _bucket(chunk_id: str, uploaded: set[str], corpus: set[str]) -> None:
+def _bucket(
+    chunk_id: str,
+    uploaded: set[str],
+    corpus: set[str],
+    known_uploaded: set[str],
+    known_corpus: set[str],
+) -> None:
     if not chunk_id:
         return
     cid = chunk_id.strip()
     lower = cid.lower()
-    if lower.startswith("corpus") or "annex" in lower or "article" in lower:
+    if cid in known_corpus:
         corpus.add(cid)
+    elif cid in known_uploaded:
+        uploaded.add(cid)
+    elif lower.startswith("corpus"):
+        corpus.add(cid)
+    elif lower.startswith("uploaded"):
+        uploaded.add(cid)
     else:
         uploaded.add(cid)

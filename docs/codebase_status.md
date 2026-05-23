@@ -2,7 +2,7 @@
 
 Living document tracking the state of the Norrin AI Act Compliance Assistant codebase. Update on every major change.
 
-**Last updated:** 2026-05-23 (Streamlit dashboard + follow-up loop added)
+**Last updated:** 2026-05-23 (core audit fixes + demo trigger tests added)
 
 ---
 
@@ -17,14 +17,14 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 | 3 | Chunking function (`chunking.py`) | done + tested |
 | 4 | Chroma vector store + config (`vector_store.py`, `config.py`) | done + tested |
 | 5 | Built-in AI Act corpus + `load_corpus_to_chroma()` | done (1,874 chunks loaded) |
-| 6 | Retrieval functions (`retrieval.py`) | done + tested |
-| 7 | Assessment Agent with structured JSON output | done + tested (mock mode) |
-| 8 | Critic Agent with pass/fail loop | done + tested (mock mode) |
-| 8b | **Pipeline orchestrator** (extension of plan) | done + tested |
+| 6 | Retrieval functions (`retrieval.py`) | done + expanded for Article 3, Article 5, Annex III, Article 50, GPAI |
+| 7 | Assessment Agent with structured JSON output | done + expanded Article 3 / prohibited-subtype / high-risk-domain fields |
+| 8 | Critic Agent with pass/fail loop | done + citation ID validation in mock mode |
+| 8b | **Pipeline orchestrator** (extension of plan) | done + baseline retrieval reused across Assessment and Critic |
 | 9 | Presenter Agent | done + tested |
 | 10 | Dashboard display (`app.py`) | done + launch-tested |
-| 11 | Follow-up input + re-run | done (built into `app.py` "Missing info & follow-up" tab) |
-| 12 | Demo cases + trigger tests | not done |
+| 11 | Follow-up input + re-run | done (state-reset bug fixed in `app.py` "Missing info & follow-up" tab) |
+| 12 | Demo cases + trigger tests | done (5 Markdown demo cases + `tests/expected_triggers.json` + `scripts/evaluate_triggers.py`) |
 
 ---
 
@@ -40,21 +40,21 @@ Reference: [`docs/mvp_plan.md`](./mvp_plan.md), section 10.
 
 | File | Responsibility | Key exports |
 |---|---|---|
-| `config.py` | Central config — paths, model names, chunk settings, MOCK_LLM flag, API keys (from env) | All constants used app-wide |
+| `config.py` | Central config — paths, model names, chunk settings, retrieval context caps, MOCK_LLM flag, API keys (from env) | All constants used app-wide |
 | `preprocessing.py` | Convert uploads (PDF/DOCX/PPTX/HTML/CSV/TXT/MD) → Markdown via MarkItDown | `process_uploaded_files`, `convert_file_to_markdown` |
 | `chunking.py` | Paragraph/sentence-aware chunker with metadata + overlap | `chunk_text`, `chunk_document` |
 | `vector_store.py` | Chroma client + collections (`uploaded_docs_collection`, `ai_act_corpus_collection`) + corpus loader | `add_chunks_to_uploaded`, `load_corpus_to_chroma`, `get_uploaded_collection`, `get_corpus_collection`, `delete_session_chunks` |
-| `retrieval.py` | RAG layer: 8 standard queries, dedup, distance-sorted results | `retrieve_uploaded_context`, `retrieve_ai_act_context`, `retrieve_combined_context`, `STANDARD_QUERIES` |
+| `retrieval.py` | RAG layer: expanded standard queries for Article 3, Article 5, Annex III, Article 50, GPAI, role clarity, governance; dedup, source tags, capped combined context | `retrieve_uploaded_context`, `retrieve_ai_act_context`, `retrieve_combined_context`, `STANDARD_QUERIES` |
 | `llm.py` | LLM provider abstraction (DeepSeek / OpenAI / Anthropic) + mock-mode switch | `call_llm`, `is_mock_mode` |
-| `pipeline.py` | Multi-agent orchestrator: Assessment → Critic → (revise once if fail) | `run_assessment_pipeline` |
+| `pipeline.py` | Multi-agent orchestrator: retrieve once → Assessment → Critic → (revise once if fail) → Presenter, with evidence context forwarded for source-aware citations | `run_assessment_pipeline` |
 
 ### Agents (`src/agents/`)
 
 | File | Role | Architecture |
 |---|---|---|
-| `assessment_agent.py` | Produce a structured first-pass EU AI Act assessment from retrieved evidence | Hybrid ReAct: baseline retrieval → single LLM call → optional `needs_more_evidence` loop (capped at 2 iterations) |
-| `critic_agent.py` | Quality gate; decide pass/fail and emit revision instruction | Single structured LLM call, no retrieval, 8-point checklist |
-| `presenter_agent.py` | Format the reviewed assessment into 6 display-ready dashboard sections + warnings + disclaimer | Pure programmatic formatter — no LLM call (deliberate: MVP plan forbids new reasoning by the Presenter) |
+| `assessment_agent.py` | Produce a structured first-pass EU AI Act assessment from retrieved evidence | Hybrid ReAct: accepts pre-retrieved baseline evidence, can request extra evidence, includes Article 3 definition notes, definition exclusion, prohibited subtype, high-risk domain, transparency/GPAI notes |
+| `critic_agent.py` | Quality gate; decide pass/fail and emit revision instruction | Single structured LLM call, no retrieval, 8-point checklist + mock-mode citation ID validation against retrieved evidence |
+| `presenter_agent.py` | Format the reviewed assessment into 6 display-ready dashboard sections + warnings + disclaimer | Pure programmatic formatter; uses pipeline evidence context for source-aware citation separation |
 
 ### Built-in corpus (`corpus/`)
 
@@ -72,6 +72,14 @@ Cached Markdown conversions live in `data/converted_markdown/_corpus/` and are r
 | File | Purpose |
 |---|---|
 | `scripts/load_corpus.py` | One-shot loader. Run once with `python -m scripts.load_corpus`. Use `--force` to wipe and reload. |
+| `scripts/evaluate_triggers.py` | Runs the 5 demo cases against `tests/expected_triggers.json` in mock mode and checks expected AI Act paths. |
+
+### Demo cases and trigger tests
+
+| Path | Purpose |
+|---|---|
+| `demo_cases/` | Five Markdown demo cases: HR screening, customer chatbot, workplace emotion detection, spam filter, and LLM report generator. |
+| `tests/expected_triggers.json` | Expected risk directions, required legal-path terms, and follow-up topics for trigger evaluation. |
 
 ### Config / infra
 
@@ -109,13 +117,13 @@ Chroma ai_act_corpus_collection (1,874 chunks)
 run_assessment_pipeline(session_id)
    ↓
    ├── retrieve_combined_context(STANDARD_QUERIES) → baseline evidence
-   ├── assessment_agent           → assessment_v1
+   ├── assessment_agent(baseline evidence) → assessment_v1
    ├── critic_agent               → verdict_v1
-   ├── (if fail) assessment_agent → assessment_v2  (revision)
+   ├── (if fail) assessment_agent(baseline evidence) → assessment_v2  (revision)
    ├── (if fail) critic_agent     → verdict_v2
-   └── presenter_agent            → display-ready sections + warnings
+   └── presenter_agent(evidence context) → display-ready sections + warnings
    ↓
-{ assessment, critic, presented, history[], _meta }
+{ assessment, critic, presented, evidence_context, history[], _meta }
 ```
 
 ---
@@ -125,13 +133,13 @@ run_assessment_pipeline(session_id)
 - `MOCK_LLM=true` (default in `.env`) → agents return pre-canned fixtures keyed to keyword signals. Full pipeline runs in ~12 s, zero API cost.
 - `MOCK_LLM=false` → same code path, hits the configured provider (`LLM_PROVIDER=deepseek` by default) using the key in `.env`.
 
-5 mock fixtures cover the 5 demo cases: HR screening, customer chatbot, workplace emotion detection, spam filter, GPAI report generator. The Critic uses deterministic heuristics that mirror real critic behavior (flags missing citations, over-confident prohibited findings, missing required sections).
+5 mock fixtures cover the 5 demo cases: HR screening, customer chatbot, workplace emotion detection, spam filter, GPAI report generator. The Assessment mock maps placeholder citations onto retrieved chunk IDs where available. The Critic uses deterministic heuristics that mirror real critic behavior (flags missing citations, invalid citation IDs, over-confident prohibited findings, missing required sections).
 
 ---
 
 ## 5. What's next
 
-1. **Step 12 — Demo cases + trigger tests** (`demo_cases/`, `tests/expected_triggers.json`). Author sample documents for each of the 5 demo paths (HR screening, customer chatbot, workplace emotion detection, spam filter, GPAI report generator) and a trigger-based evaluation harness.
+1. **Run trigger evaluation in a dependency-complete environment.** Use `python -m scripts.evaluate_triggers` after installing requirements and loading the corpus.
 2. **Optional: real-LLM run.** Flip `MOCK_LLM=false` in `.env` and verify the agents produce sensible output against the actual DeepSeek API on each demo case.
 3. **Optional: polish pass.** Improve UI styling, add export-to-report, add a portfolio comparison view, or add Finnish implementation context (bonus capabilities from the challenge brief).
 

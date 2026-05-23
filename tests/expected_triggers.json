@@ -1,0 +1,43 @@
+[
+  {
+    "case_name": "HR candidate screening",
+    "case_dir": "demo_cases/hr_screening",
+    "expected_ai_system": "yes",
+    "expected_risk_tiers": ["high_risk_candidate"],
+    "must_mention_terms": ["annex iii", "employment", "provider"],
+    "must_ask_about": ["candidate", "decision", "provider"]
+  },
+  {
+    "case_name": "Customer support chatbot",
+    "case_dir": "demo_cases/customer_chatbot",
+    "expected_ai_system": "yes",
+    "expected_risk_tiers": ["limited_risk"],
+    "must_mention_terms": ["article 50", "chatbot", "gpai"],
+    "must_ask_about": ["llm", "human"]
+  },
+  {
+    "case_name": "Workplace emotion detection",
+    "case_dir": "demo_cases/workplace_emotion_detection",
+    "expected_ai_system": "yes",
+    "expected_risk_tiers": ["prohibited"],
+    "expected_prohibited_subtype": "5(1)(f)_workplace_education_emotion_recognition",
+    "must_mention_terms": ["article 5", "emotion", "workplace"],
+    "must_ask_about": ["emotion", "medical", "safety"]
+  },
+  {
+    "case_name": "Email spam filter",
+    "case_dir": "demo_cases/spam_filter",
+    "expected_ai_system": "yes",
+    "expected_risk_tiers": ["minimal_risk"],
+    "must_mention_terms": ["spam", "minimal"],
+    "must_ask_about": []
+  },
+  {
+    "case_name": "LLM report generator",
+    "case_dir": "demo_cases/llm_report_generator",
+    "expected_ai_system": "yes",
+    "expected_risk_tiers": ["gpai_obligations"],
+    "must_mention_terms": ["gpai", "article 53", "deployer"],
+    "must_ask_about": ["provider", "documentation", "high-risk"]
+  }
+]

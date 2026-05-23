@@ -52,6 +52,8 @@ CHUNK_OVERLAP: int = 150
 
 # --- Retrieval ---
 TOP_K: int = 6
+MAX_UPLOADED_CONTEXT_CHUNKS: int = int(os.getenv("MAX_UPLOADED_CONTEXT_CHUNKS", "40"))
+MAX_CORPUS_CONTEXT_CHUNKS: int = int(os.getenv("MAX_CORPUS_CONTEXT_CHUNKS", "48"))
 
 # --- Ensure directories exist at import time ---
 for _dir in (UPLOAD_DIR, CONVERTED_MD_DIR, VECTOR_STORE_DIR, OUTPUTS_DIR, CORPUS_DIR):

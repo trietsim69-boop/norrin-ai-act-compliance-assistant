@@ -95,7 +95,7 @@ def critic_agent(
         response_format="json",
         temperature=0.1,
         max_tokens=1500,
-        mock=_pick_mock_fixture(assessment),
+        mock=_pick_mock_fixture(assessment, uploaded_chunks or [], corpus_chunks or []),
     )
 
     result = _safe_json_loads(raw["content"])
@@ -174,7 +174,11 @@ def _safe_json_loads(text: str) -> dict:
 # Mock fixtures — used when MOCK_LLM=true
 # ---------------------------------------------------------------------------
 
-def _pick_mock_fixture(assessment: dict) -> dict:
+def _pick_mock_fixture(
+    assessment: dict,
+    uploaded_chunks: list[dict],
+    corpus_chunks: list[dict],
+) -> dict:
     """
     Deterministic critic for mock mode. Fails the assessment if any of these
     quality issues are detected; otherwise passes.
@@ -182,16 +186,12 @@ def _pick_mock_fixture(assessment: dict) -> dict:
     issues: list[dict] = []
     missing_questions: list[str] = []
 
-    if assessment.get("_meta", {}).get("was_revision"):
-        return _ok_fixture(
-            missing_questions=_default_followups(assessment),
-            note="Revised assessment looks acceptable.",
-        )
-
     pa = assessment.get("preliminary_assessment", {}) or {}
     risk_tier = pa.get("risk_tier", "")
     confidence = pa.get("confidence", "")
     legal_citations = pa.get("legal_citations") or []
+    uploaded_ids = {c.get("chunk_id", "") for c in uploaded_chunks if c.get("chunk_id")}
+    corpus_ids = {c.get("chunk_id", "") for c in corpus_chunks if c.get("chunk_id")}
 
     # Heuristic 1: high-stakes classification with no legal citation
     if risk_tier in ("prohibited", "high_risk_candidate") and not legal_citations:
@@ -201,6 +201,15 @@ def _pick_mock_fixture(assessment: dict) -> dict:
             "problem": "No legal citation supports the risk classification.",
             "severity": "high",
         })
+
+    for cid in legal_citations:
+        if corpus_ids and cid not in corpus_ids:
+            issues.append({
+                "category": "citation",
+                "claim": f"legal_citations contains {cid}",
+                "problem": "The cited legal chunk_id was not present in retrieved corpus evidence.",
+                "severity": "high",
+            })
 
     # Heuristic 2: prohibited claim is high-confidence (should always be cautious)
     if risk_tier == "prohibited" and confidence == "high":
@@ -233,6 +242,25 @@ def _pick_mock_fixture(assessment: dict) -> dict:
                 "problem": "Stated at high confidence but no evidence chunk_id is cited.",
                 "severity": "medium",
             })
+        if isinstance(fact, dict):
+            for cid in fact.get("evidence") or []:
+                if uploaded_ids and cid not in uploaded_ids:
+                    issues.append({
+                        "category": "citation",
+                        "claim": f"extracted_facts.{name}",
+                        "problem": f"The cited uploaded chunk_id was not present in retrieved uploaded evidence: {cid}",
+                        "severity": "medium",
+                    })
+
+    for obs in assessment.get("governance_observations") or []:
+        for cid in obs.get("citations") or []:
+            if corpus_ids and cid.startswith("corpus") and cid not in corpus_ids:
+                issues.append({
+                    "category": "citation",
+                    "claim": "governance_observations.citations",
+                    "problem": f"The cited corpus chunk_id was not present in retrieved corpus evidence: {cid}",
+                    "severity": "medium",
+                })
 
     # Always surface useful follow-up questions
     missing_questions = _default_followups(assessment)

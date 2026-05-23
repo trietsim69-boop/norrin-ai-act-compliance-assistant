@@ -9,6 +9,10 @@ Returns a single dict with:
       "assessment": <final assessment dict>,
       "critic":     <final critic verdict>,
       "presented":  <display-ready dashboard data from the Presenter Agent>,
+      "evidence_context": {
+        "uploaded_chunk_ids": [...],
+        "corpus_chunk_ids": [...]
+      },
       "history":    [
         {"stage": "assessment_v1", "output": {...}},
         {"stage": "critic_v1",     "output": {...}},
@@ -38,7 +42,7 @@ def run_assessment_pipeline(
     session_metadata: dict | None = None,
     top_k_per_query: int = 4,
 ) -> dict:
-    """Run the Assessment -> Critic -> (Revise once) flow for a session."""
+    """Run the retrieve-once -> Assessment -> Critic -> (Revise once) flow."""
     session_metadata = session_metadata or {}
     history: list[dict] = []
 
@@ -54,6 +58,8 @@ def run_assessment_pipeline(
         session_id=session_id,
         session_metadata=session_metadata,
         top_k_per_query=top_k_per_query,
+        uploaded_chunks=uploaded_chunks,
+        corpus_chunks=corpus_chunks,
     )
     history.append({"stage": "assessment_v1", "output": assessment})
 
@@ -71,6 +77,8 @@ def run_assessment_pipeline(
             session_id=session_id,
             session_metadata=session_metadata,
             top_k_per_query=top_k_per_query,
+            uploaded_chunks=uploaded_chunks,
+            corpus_chunks=corpus_chunks,
             previous_assessment=assessment,
             revision_instruction=verdict["revision_instruction"],
         )
@@ -86,9 +94,15 @@ def run_assessment_pipeline(
         assessment = revised
         verdict = verdict_v2
 
+    evidence_context = {
+        "uploaded_chunk_ids": [c.get("chunk_id", "") for c in uploaded_chunks if c.get("chunk_id")],
+        "corpus_chunk_ids": [c.get("chunk_id", "") for c in corpus_chunks if c.get("chunk_id")],
+    }
+
     presented = presenter_agent({
         "assessment": assessment,
         "critic": verdict,
+        "evidence_context": evidence_context,
         "_meta": {
             "revision_triggered": revision_triggered,
             "iterations": len(history),
@@ -100,6 +114,7 @@ def run_assessment_pipeline(
         "assessment": assessment,
         "critic": verdict,
         "presented": presented,
+        "evidence_context": evidence_context,
         "history": history,
         "_meta": {
             "revision_triggered": revision_triggered,
