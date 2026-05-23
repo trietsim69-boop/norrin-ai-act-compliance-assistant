@@ -26,6 +26,7 @@ _UPLOADED_CHUNK_RE = re.compile(
 
 _EVIDENCE_TYPE_LABELS = {
     "uploaded_document": "Uploaded document",
+    "user_input": "User-provided description",
     "regulation": "Regulation",
     "official_guidance": "Official guidance",
     "unknown": "Unknown",
@@ -159,6 +160,8 @@ def _entry_from_store(chunk_id: str, text: str, meta: dict, fallback_type: str) 
 
     if source_type in ("regulation", "official_guidance"):
         source_label = title or _title_from_corpus_stem(_parse_corpus_stem(chunk_id)) or "EU AI Act"
+    elif source_type == "user_input":
+        source_label = "Manual use-case description"
     else:
         source_label = _prettify_doc_name(filename) or _title_from_uploaded_id(chunk_id) or chunk_id
 

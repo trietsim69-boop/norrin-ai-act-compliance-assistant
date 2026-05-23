@@ -100,6 +100,6 @@ def chunk_document(doc: dict) -> list[dict]:
         text=text,
         session_id=doc.get("session_id", ""),
         filename=doc.get("filename", ""),
-        source_type="uploaded_document",
+        source_type=doc.get("source_type", "uploaded_document"),
         document_type=doc.get("document_type", "general_document"),
     )

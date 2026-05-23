@@ -24,7 +24,7 @@ from pathlib import Path
 import streamlit as st
 
 from src.config import LLM_PROVIDER, LLM_MODEL, MOCK_LLM
-from src.preprocessing import process_uploaded_files
+from src.preprocessing import process_uploaded_files, process_manual_description
 from src.chunking import chunk_document
 from src.vector_store import (
     add_chunks_to_uploaded,
@@ -156,7 +156,7 @@ with st.sidebar:
 
 st.title("Norrin AI Act Compliance Assistant")
 st.caption(
-    "Upload documents describing one AI use case → receive a structured, "
+    "Upload documents **or** describe the use case in text → receive a structured, "
     "evidence-grounded preliminary EU AI Act assessment."
 )
 st.warning(
@@ -170,16 +170,31 @@ st.warning(
 # Stage 1 — Upload documents
 # ---------------------------------------------------------------------------
 
-st.header("1. Upload documents for this AI use case")
+st.header("1. Describe this AI use case")
 
 uploaded_files = st.file_uploader(
-    "Drop case studies, product descriptions, vendor white papers, technical "
-    "overviews, policy notes, etc. (PDF, DOCX, PPTX, HTML, CSV, TXT, MD)",
+    "Upload documents (optional)",
     type=["pdf", "docx", "pptx", "html", "htm", "csv", "txt", "md"],
     accept_multiple_files=True,
+    help="PDF, DOCX, PPTX, HTML, CSV, TXT, or MD. Skip this if you only use the text box below.",
 )
 
-run_disabled = not uploaded_files or st.session_state["is_running"]
+st.markdown("**Or describe the AI use case manually**")
+
+manual_description = st.text_area(
+    "Use-case description (text only is fine — no PDF required)",
+    height=120,
+    placeholder=(
+        "Example: We use an AI tool to rank job applicants based on CVs and interview "
+        "transcripts. Recruiters review the top candidates before interview decisions."
+    ),
+    help="Required if you upload no files. Saved and indexed like a document "
+         "(source_type: user_input). You can combine with uploads.",
+)
+
+has_files = bool(uploaded_files)
+has_manual = bool(manual_description.strip())
+run_disabled = (not has_files and not has_manual) or st.session_state["is_running"]
 run_label = "Analyze" if not st.session_state["is_running"] else "Analysis running…"
 
 if st.button(run_label, type="primary", disabled=run_disabled):
@@ -188,14 +203,22 @@ if st.button(run_label, type="primary", disabled=run_disabled):
     delete_session_chunks(session_id)  # clear prior chunks for this session
 
     t_start = time.perf_counter()
-    progress = st.progress(0, text="Converting files via MarkItDown…")
+    progress = st.progress(0, text="Preparing input…")
 
-    docs = process_uploaded_files(uploaded_files, session_id=session_id)
+    docs: list[dict] = []
+    if uploaded_files:
+        progress.progress(10, text="Converting files via MarkItDown…")
+        docs.extend(process_uploaded_files(uploaded_files, session_id=session_id))
+    if has_manual:
+        docs.append(process_manual_description(manual_description, session_id=session_id))
+
     st.session_state["processed_docs"] = docs
     progress.progress(25, text="Chunking…")
 
     chunks: list[dict] = []
     for d in docs:
+        if d.get("error"):
+            continue
         chunks.extend(chunk_document(d))
     st.session_state["chunks"] = chunks
     progress.progress(50, text="Embedding and indexing chunks…")
@@ -207,6 +230,8 @@ if st.button(run_label, type="primary", disabled=run_disabled):
         **(st.session_state["session_metadata"] or {}),
         "follow_up_answers": st.session_state["follow_up_answers"],
     }
+    if has_manual:
+        metadata["manual_use_case_description"] = manual_description.strip()
     result = run_assessment_pipeline(session_id, session_metadata=metadata)
     st.session_state["pipeline_result"] = result
     progress.progress(100, text=f"Done in {time.perf_counter() - t_start:.1f}s")
@@ -223,7 +248,8 @@ if st.session_state["processed_docs"]:
     with st.expander("Uploaded documents", expanded=False):
         for d in st.session_state["processed_docs"]:
             error = d.get("error")
-            line = f"**{d['filename']}** · type: `{d['document_type']}`"
+            source = d.get("source_type", "uploaded_document")
+            line = f"**{d['filename']}** · type: `{d['document_type']}` · source: `{source}`"
             if error:
                 st.error(f"{line} — {error}")
             else:
@@ -238,7 +264,10 @@ if st.session_state["processed_docs"]:
 result = st.session_state["pipeline_result"]
 
 if result is None:
-    st.info("Upload at least one document and click **Analyze** to begin.", icon="📄")
+    st.info(
+        "Upload at least one document **or** describe the use case manually, then click **Analyze**.",
+        icon="📄",
+    )
     st.stop()
 
 

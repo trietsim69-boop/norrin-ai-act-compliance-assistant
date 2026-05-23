@@ -110,3 +110,27 @@ def process_uploaded_files(files: list, session_id: str) -> list[dict]:
             )
 
     return results
+
+
+def process_manual_description(text: str, session_id: str) -> dict:
+    """
+    Persist a free-text use-case description as markdown and return a doc dict
+    compatible with chunk_document() / process_uploaded_files() output shape.
+    """
+    text = (text or "").strip()
+    session_md_dir = CONVERTED_MD_DIR / session_id
+    session_md_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = "manual_use_case_description.md"
+    md_path = session_md_dir / filename
+    markdown_text = f"# Manual use-case description\n\n{text}\n"
+    save_markdown(markdown_text, md_path)
+
+    return {
+        "filename": filename,
+        "session_id": session_id,
+        "markdown_path": str(md_path),
+        "document_type": "manual_description",
+        "source_type": "user_input",
+        "error": None,
+    }
