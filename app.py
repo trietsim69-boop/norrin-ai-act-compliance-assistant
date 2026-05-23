@@ -633,7 +633,31 @@ def _render_context_panel_dark(
         f'<div class="ctx-panel"><div class="ctx-title">3 · System context</div>{row_html}</div>',
         unsafe_allow_html=True,
     )
-    st.caption("Read-only summary. Edit case metadata in the left sidebar → Save metadata.")
+    st.caption("Read-only summary. Edit in **Case metadata** (left sidebar) or re-run after updating **3 · Case context** on the intake page.")
+
+
+def _apply_session_metadata(
+    *,
+    case_name: str,
+    sector_hint: str,
+    org_role: str,
+    deployment_context: str,
+    region_eu_use: str,
+    model_gpai_notes: str,
+) -> None:
+    st.session_state["session_metadata"] = {
+        "case_name": case_name.strip() or None,
+        "sector_hint": sector_hint.strip() or None,
+        "org_role": org_role or None,
+        "deployment_context": deployment_context.strip() or None,
+        "region_eu_use": region_eu_use.strip() or None,
+        "model_gpai_notes": model_gpai_notes.strip() or None,
+        **{
+            k: v
+            for k, v in (st.session_state.get("session_metadata") or {}).items()
+            if k == "manual_use_case_description"
+        },
+    }
 
 
 def _metadata_form_sidebar() -> bool:
@@ -679,17 +703,89 @@ def _metadata_form_sidebar() -> bool:
         )
         saved = st.form_submit_button("Save metadata", use_container_width=True, type="primary")
         if saved:
-            st.session_state["session_metadata"] = {
-                "case_name": case_name.strip() or None,
-                "sector_hint": sector_hint.strip() or None,
-                "org_role": org_role or None,
-                "deployment_context": deployment_context.strip() or None,
-                "region_eu_use": region_eu_use.strip() or None,
-                "model_gpai_notes": model_gpai_notes.strip() or None,
-            }
+            _apply_session_metadata(
+                case_name=case_name,
+                sector_hint=sector_hint,
+                org_role=org_role,
+                deployment_context=deployment_context,
+                region_eu_use=region_eu_use,
+                model_gpai_notes=model_gpai_notes,
+            )
             st.toast("Metadata saved")
             return True
     return False
+
+
+def _sync_intake_metadata_from_widgets() -> None:
+    """Copy intake page widget keys into session_metadata (called before Run assessment)."""
+    _apply_session_metadata(
+        case_name=st.session_state.get("intake_meta_case_name", ""),
+        sector_hint=st.session_state.get("intake_meta_sector", ""),
+        org_role=st.session_state.get("intake_meta_org_role", ""),
+        deployment_context=st.session_state.get("intake_meta_deployment", ""),
+        region_eu_use=st.session_state.get("intake_meta_region", ""),
+        model_gpai_notes=st.session_state.get("intake_meta_gpai", ""),
+    )
+
+
+def _init_intake_metadata_widgets() -> None:
+    meta = st.session_state.get("session_metadata") or {}
+    defaults = {
+        "intake_meta_case_name": meta.get("case_name") or "",
+        "intake_meta_sector": meta.get("sector_hint") or "",
+        "intake_meta_org_role": meta.get("org_role") or "",
+        "intake_meta_deployment": meta.get("deployment_context") or "",
+        "intake_meta_region": meta.get("region_eu_use") or "",
+        "intake_meta_gpai": meta.get("model_gpai_notes") or "",
+    }
+    for k, v in defaults.items():
+        st.session_state.setdefault(k, v)
+
+
+def _render_intake_metadata_card() -> None:
+    """Case context on the intake page (feeds System context panel after run)."""
+    _init_intake_metadata_widgets()
+    with st.container(border=True):
+        _section_heading("3", "Case context")
+        st.markdown(
+            '<p style="color:#61736b;font-size:0.82rem;margin:-0.25rem 0 0.75rem;">'
+            "Optional · fills the System context panel on the report (sector, role, deployment).</p>",
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.text_input("Use-case name", key="intake_meta_case_name")
+            st.text_input(
+                "Sector",
+                key="intake_meta_sector",
+                placeholder="e.g. Workplace wellness, HR / employment",
+            )
+            st.selectbox(
+                "Organisation role",
+                options=["", "provider", "deployer", "both", "unclear"],
+                key="intake_meta_org_role",
+            )
+        with c2:
+            st.text_area(
+                "Deployment context",
+                key="intake_meta_deployment",
+                height=88,
+                placeholder="Where and how the system is used",
+            )
+            st.text_input(
+                "Region / EU use",
+                key="intake_meta_region",
+                placeholder="e.g. EU workplace deployer",
+            )
+            st.text_input(
+                "Model / GPAI notes",
+                key="intake_meta_gpai",
+                placeholder="e.g. proprietary model, third-party LLM",
+            )
+        if st.button("Save case context", key="intake_save_context"):
+            _sync_intake_metadata_from_widgets()
+            st.toast("Case context saved")
+            st.rerun()
 
 
 def _render_regulatory_library() -> None:
@@ -1286,9 +1382,13 @@ app_view: str = st.session_state["app_view"]
 # Sidebar — case metadata & session controls
 with st.sidebar:
     st.markdown("### Case metadata")
-    st.caption("Describe the use case context for this session.")
-    if _metadata_form_sidebar():
-        st.rerun()
+    has_result = st.session_state.get("pipeline_result") is not None
+    if has_result:
+        st.caption("Edit context, then Save metadata or Reassess.")
+        if _metadata_form_sidebar():
+            st.rerun()
+    else:
+        st.caption("Fill **3 · Case context** on the main page before Run assessment.")
     if MOCK_LLM:
         st.caption("Demo mode — offline fixtures.")
     st.divider()
@@ -1343,7 +1443,6 @@ if app_view == "intake":
     )
 
     col_up, col_desc = st.columns(2, gap="large")
-    run_clicked = False
 
     with col_up:
         with st.container(border=True):
@@ -1397,19 +1496,28 @@ if app_view == "intake":
             has_manual = bool(manual_description.strip())
             run_disabled = (not has_files and not has_manual) or st.session_state["is_running"]
             run_label = "Run assessment" if not st.session_state["is_running"] else "Analysis running…"
-            _, btn_col = st.columns([1, 1])
-            with btn_col:
-                run_clicked = st.button(
-                    run_label,
-                    type="primary",
-                    disabled=run_disabled,
-                    use_container_width=True,
-                    key="run_assessment_main",
-                )
             if not has_files and not has_manual:
                 st.caption("Add at least one document or a use-case description to enable Run assessment.")
 
+    _render_intake_metadata_card()
+
+    has_files = bool(uploaded_files) if "uploaded_files" in dir() else False
+    has_manual = bool(manual_description.strip()) if "manual_description" in dir() else False
+    run_disabled = (not has_files and not has_manual) or st.session_state["is_running"]
+    run_label = "Run assessment" if not st.session_state["is_running"] else "Analysis running…"
+
+    _, run_col = st.columns([4, 1])
+    with run_col:
+        run_clicked = st.button(
+            run_label,
+            type="primary",
+            disabled=run_disabled,
+            use_container_width=True,
+            key="run_assessment_main",
+        )
+
     if run_clicked:
+        _sync_intake_metadata_from_widgets()
         st.session_state["is_running"] = True
         st.session_state["pipeline_result"] = None
         delete_session_chunks(session_id)
